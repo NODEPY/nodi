@@ -147,7 +147,7 @@ class NodiReceiveService : Service() {
             try {
                 val addresses = localAddresses()
                 if (addresses.isEmpty()) throw ReceiveFailure("no local network")
-                NodiDocumentStore.cleanInterrupted(this)
+                NodiDocumentStore.cleanInterrupted(this, Uri.parse(tree))
                 val store = NodiDocumentStore(this, Uri.parse(tree))
                 val temp = File(cacheDir, "receive").apply { mkdirs() }
                 // The preceding session has finished; only our own private snapshots are removed.
@@ -173,7 +173,11 @@ class NodiReceiveService : Service() {
                 }
                 receiver.run()
             } catch (error: Exception) {
-                if (!current.cancelled.get()) failure = receiveError((error as? ReceiveFailure)?.reason ?: "cannot start receiver")
+                if (!current.cancelled.get()) {
+                    android.util.Log.e("NodiReceive", "Receiver failed", error)
+                    failure = if (error is ReceiveFailure) receiveError(error.reason)
+                        else error.javaClass.simpleName + ": " + (error.message ?: "Cannot start receiver")
+                }
             } finally {
                 current.receiver?.close()
                 identity?.close()

@@ -14,7 +14,7 @@ data class NearbyDevice(val name: String, val host: InetAddress, val port: Int, 
     override fun toString() = "$name · ${host.hostAddress}"
 }
 /** Public TXT only. The session's upload capability never enters mDNS. */
-class NodiAdvertiser(context: Context, port: Int, pin: String) {
+class NodiAdvertiser(context: Context, listenPort: Int, pin: String) {
     private val manager = context.getSystemService(NsdManager::class.java)
     private val main = Handler(Looper.getMainLooper())
     private var stopped = false
@@ -29,7 +29,7 @@ class NodiAdvertiser(context: Context, port: Int, pin: String) {
         val info = NsdServiceInfo().apply {
             serviceName = "Nodi ${android.os.Build.MODEL}".take(45)
             serviceType = SERVICE
-            this.port = port
+            this.port = listenPort
             setAttribute("v", "1")
             setAttribute("fp", pin)
         }

@@ -415,21 +415,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.activity.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.labelColor]))
         if self.activity.string.count > 20000 { self.activity.string = String(self.activity.string.suffix(12000)) }; self.activity.scrollToEndOfDocument(nil)
     }
-    private func selectedDevice() -> SavedDevice? { let i = self.devicePicker.indexOfSelectedItem; return self.saved.indices.contains(i) ? self.saved[i] : nil }
+    private func selectedDevice() -> SavedDevice? {
+        guard let pin = self.devicePicker.selectedItem?.representedObject as? String else {
+            return nil
+        }
+        return self.saved.first { $0.fingerprint == pin }
+    }
     private func renderDevices() {
         let selectedPin = self.devicePicker.selectedItem?.representedObject as? String
-        self.devicePicker.removeAllItems()
-        if self.saved.isEmpty && self.discovered.isEmpty { self.devicePicker.addItem(withTitle: NodiL("Пристроїв ще немає")) }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        var added = Set<String>()
+
+        func appendDevice(_ name: String, _ pin: String) {
+            guard added.insert(pin).inserted else { return }
+            let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+            item.representedObject = pin
+            menu.addItem(item)
+        }
+
         for peer in self.saved {
             let online = self.discovered.contains { $0.pin == peer.fingerprint }
-            self.devicePicker.addItem(withTitle: "\(peer.name) · \(online ? NodiL("у мережі") : NodiL("не знайдено"))")
+            let status = NodiL(online ? "у мережі" : "не знайдено")
+            appendDevice(peer.name + " · " + status, peer.fingerprint)
         }
-        for (i,peer) in self.saved.enumerated() {self.devicePicker.item(at:i)?.representedObject=peer.fingerprint}
-        for peer in self.discovered where !self.saved.contains(where:{$0.fingerprint==peer.pin}) {
-            self.devicePicker.addItem(withTitle:peer.name+" · "+NodiL("Потрібне підключення"));self.devicePicker.lastItem?.representedObject=peer.pin
+        for peer in self.discovered {
+            appendDevice(peer.name + " · " + NodiL("Потрібне підключення"), peer.pin)
         }
-        if let pin=selectedPin,let i=self.devicePicker.itemArray.firstIndex(where:{($0.representedObject as? String)==pin}) {self.devicePicker.selectItem(at:i)}
-        self.deviceChanged(); self.setBusy(self.sender != nil)
+        if menu.items.isEmpty {
+            menu.addItem(NSMenuItem(
+                title: NodiL("Пристроїв ще немає"), action: nil, keyEquivalent: ""
+            ))
+        }
+
+        self.devicePicker.menu = menu
+        let selected = menu.items.first {
+            ($0.representedObject as? String) == selectedPin && selectedPin != nil
+        } ?? menu.items.first
+        self.devicePicker.select(selected)
+        self.deviceChanged()
     }
     @objc private func deviceChanged() {
         if let peer = self.selectedDevice() {

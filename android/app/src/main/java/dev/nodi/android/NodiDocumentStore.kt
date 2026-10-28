@@ -12,7 +12,7 @@ import java.util.UUID
 class NodiDocumentStore(context: Context, private val tree: Uri) : ReceiveStore {
     private val appContext = context.applicationContext
     private val resolver = context.applicationContext.contentResolver
-    private val journal = context.getSharedPreferences("nodi_receive_pending", Context.MODE_PRIVATE)
+    private val journal = folderJournal(context, tree)
     private val parent: Uri
     init {
         requireLocalTree(tree)
@@ -26,6 +26,26 @@ class NodiDocumentStore(context: Context, private val tree: Uri) : ReceiveStore 
     }
     fun folderName(): String = displayName(parent) ?: "Nodi"
 
+    // Validate real access, not just the provider's metadata flags.
+    fun validateWritable(): NodiDocumentStore {
+        val name = ".nodi-" + UUID.randomUUID() + ".part"
+        var probe = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name)
+            ?: throw IOException("Cannot create a file in the selected folder")
+        try {
+            resolver.openOutputStream(probe, "w")?.use { it.write(78) }
+                ?: throw IOException("Cannot write to the selected folder")
+            resolver.openInputStream(probe)?.use {
+                if (it.read() != 78 || it.read() != -1) throw IOException("Folder verification failed")
+            } ?: throw IOException("Cannot read the selected folder")
+            probe = DocumentsContract.renameDocument(resolver, probe, name + ".check")
+                ?: throw IOException("The selected folder does not support renaming")
+        } finally {
+            if (!DocumentsContract.deleteDocument(resolver, probe))
+                throw IOException("Cannot remove the test file from the selected folder")
+        }
+        return this
+    }
+
     override fun checkName(name: String) {
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -35,9 +55,10 @@ class NodiDocumentStore(context: Context, private val tree: Uri) : ReceiveStore 
         } ?: throw ReceiveFailure("cannot read destination folder")
     }
 
+    @Synchronized
     override fun commit(snapshot: File, incoming: IncomingFile, checkActive: () -> Unit): String {
         checkActive()
-        cleanInterrupted(appContext)
+        cleanInterrupted(appContext, tree)
         checkName(incoming.name)
         val temporaryName = ".nodi-${UUID.randomUUID()}.part"
         var document = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", temporaryName)
@@ -110,8 +131,29 @@ class NodiDocumentStore(context: Context, private val tree: Uri) : ReceiveStore 
                 "Вибери папку у внутрішній пам’яті телефона або на SD-карті. Хмарні папки поки не підтримуються."
             }
         }
-        fun cleanInterrupted(context: Context) {
-            val prefs = context.getSharedPreferences("nodi_receive_pending", Context.MODE_PRIVATE)
+        private fun folderJournal(context: Context, tree: Uri): android.content.SharedPreferences {
+            val key = MessageDigest.getInstance("SHA-256")
+                .digest(tree.toString().toByteArray(Charsets.UTF_8)).hex()
+            val prefs = context.getSharedPreferences("nodi_receive_pending_" + key, Context.MODE_PRIVATE)
+            // Migrate only this tree's old journal; another folder cannot block this one.
+            val legacy = context.getSharedPreferences("nodi_receive_pending", Context.MODE_PRIVATE)
+            val raw = legacy.getString("uri", null)
+            val name = legacy.getString("name", null)
+            if (raw != null && name != null) {
+                val owned = try {
+                    val uri = Uri.parse(raw)
+                    uri.authority == tree.authority &&
+                        DocumentsContract.getTreeDocumentId(uri) == DocumentsContract.getTreeDocumentId(tree)
+                } catch (_: Exception) { false }
+                if (owned && !prefs.contains("uri") &&
+                    prefs.edit().putString("uri", raw).putString("name", name).commit()) {
+                    legacy.edit().clear().commit()
+                }
+            }
+            return prefs
+        }
+        fun cleanInterrupted(context: Context, tree: Uri) {
+            val prefs = folderJournal(context, tree)
             val raw = prefs.getString("uri", null) ?: return
             val expected = prefs.getString("name", null) ?: return
             if (!expected.startsWith(".nodi-") || !expected.endsWith(".part")) return

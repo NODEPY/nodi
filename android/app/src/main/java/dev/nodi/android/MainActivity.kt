@@ -743,7 +743,7 @@ class MainActivity : Activity() {
         renderReceiver()
         worker.execute {
             try {
-                val name = NodiDocumentStore(this, uri).folderName()
+                val name = NodiDocumentStore(this, uri).validateWritable().folderName()
                 getSharedPreferences("nodi_receive", MODE_PRIVATE).edit()
                     .putString("tree", uri.toString()).putString("folder_name", "Папка: $name").apply()
                 ui {
@@ -753,10 +753,11 @@ class MainActivity : Activity() {
                     renderReceiver()
                     if (scanAfterReady) requestReceive()
                 }
-            } catch (_: Exception) { ui {
+            } catch (error: Exception) { ui {
                 choosingFolder = false
                 renderReceiver()
-                receiverDetail.text = "Ця папка недоступна для запису. Вибери іншу папку у внутрішній пам’яті."
+                receiverDetail.text = "Folder: " + error.javaClass.simpleName + ": " +
+                    (error.message ?: "Cannot access the selected folder")
             } }
         }
     }
