@@ -1,125 +1,55 @@
 # Nodi
 
-Альфа. Незалежного аудиту безпеки не було. Лише локальна мережа. Не використовуйте для критично важливих файлів.
-
-[English](README.en.md)
-
-Go-ядро передачі файлів + нативне вікно Swift/AppKit. Це локальний прототип:
-вибір файлу, приймання, код з'єднання, статус, скасування та журнал подій.
-Браузер, сервер зберігання й сторонні Go/Swift-бібліотеки не потрібні.
+Alpha. Not independently security-audited. LAN only.
+Do not use for critical files.
 
 
-## Запуск у VS Code
+## Overview
 
-1. Розпакуй архів і відкрий папку `nodi`, де лежить `go.mod`.
-   Можна працювати в цій новій папці, залишивши попередній проєкт як резервну копію.
-2. Зупини попередній консольний приймач через Ctrl+C.
-3. У терміналі VS Code виконай:
+Direct encrypted file transfer between devices on the same local network.
+No cloud or accounts.
 
-```bash
-bash scripts/run-macos.sh
-```
+Components: Go core and CLI, native Swift/AppKit macOS app, Kotlin Android app.
+The Go and Swift components use no third-party libraries.
 
-Скрипт збере Go-ядро та вікно, створить `build/Nodi.app`, підпише його локально
-й відкриє. Він не встановлює застосунок у `/Applications`, не додає автозапуску
-й не потребує Apple Developer акаунта. Для наступного запуску достатньо
-подвійного кліку на `build/Nodi.app`. Перед повторною збіркою закрий Nodi.
+## Features
 
-Якщо бракує Apple Command Line Tools, скрипт повідомить про це. Тоді виконай:
+- QR pairing and LAN device discovery.
+- File selection, sequential multi-file sending, cancellation and receiving into a chosen folder.
+- TLS 1.3, certificate fingerprint checks and SHA-256 file verification.
+- Existing files are not overwritten.
+- Up to two incoming transfers, 2 GiB per file and a 30-minute transfer limit.
 
-```bash
-xcode-select --install
-```
+## Build
 
-Дочекайся завершення встановлення й повтори команду запуску. Потрібні macOS 12+
-та встановлений Go. Скрипт вибирає архітектуру твого Mac (Apple Silicon або Intel).
-Це локальна збірка для розробки; публічний підпис і нотаризацію не налаштовано.
+macOS: requires macOS 12+, Go and Xcode Command Line Tools.
+Run `bash scripts/run-macos.sh`.
 
-## Перша передача у вікні — без другого пристрою
+Android: minSdk 29, app version 1.0.
+Open `android/` in Android Studio, or run `./gradlew assembleDebug` there.
 
-1. Натисни **Увімкнути приймання**. З'явиться статус **Очікую файли**.
-2. Натисни **Вибрати файл…** і вибери невеликий звичайний файл.
-3. Натисни **Тест на цьому Mac**. Nodi сам підставить локальний код і надішле файл.
-4. Дочекайся **Готово. Одержувач перевірив і зберіг файл.**
-5. Натисни **Відкрити папку**. За замовчуванням це `~/Downloads/Nodi`.
+## Pairing
 
-Це справжня TLS-передача між двома процесами на одному Mac.
-Повторне надсилання того самого імені відхиляється, щоб зберегти попередній файл.
-Для нового тесту вибери інший файл або перейменуй його.
+On Mac, choose Add phone. On Android, choose Add device and scan the QR.
+Devices must be on the same LAN; discovery uses mDNS.
 
-## Приймання з іншого комп'ютера
+## Limitations
 
-Увімкни приймання, вибери у списку LAN-адресу свого Wi-Fi / Ethernet,
-натисни **Копіювати код** й передай код відправнику довіреним каналом.
-Він вставляє його в поле **Встав код nodi1-…**, вибирає файл і надсилає.
-Пункт **Цей Mac — тест** працює лише на твоєму комп'ютері.
-Якщо система запитає дозвіл локальної мережі або вхідних з'єднань, дозволь Nodi.
+No cross-network connection, folder transfer, resume or remote file browsing.
+Receiving storage must support hard links: APFS does; FAT/exFAT do not.
+The macOS build is ad-hoc signed, not notarized.
+The initial Android alpha APK is a debug build.
 
-## Що працює
+## Checks
 
-- Приймання у вибрану папку; можна змінити її, коли приймання вимкнене.
-- Надсилання одного файлу, скасування надсилання, зупинка приймача.
-- TLS 1.3, випадковий секретний код, перевірка відбитка сертифіката та SHA-256 файлу.
-- Кінцевий файл створюється після перевірки; наявні файли не перезаписуються.
-- До двох одночасних вхідних передач, до 2 GiB на файл.
-- Коди не потрапляють у журнал і не зберігаються в налаштуваннях.
-  Зберігається лише вибрана папка. Код, скопійований кнопкою, лишається в буфері обміну.
-- Старі консольні команди збережено: дивись [docs/CLI.md](docs/CLI.md).
+Run `go vet ./...` and `go test ./...`.
+Additional checks: `go test -race ./...` and `python3 scripts/check-core.py`.
+See [TESTING.md](TESTING.md) and [CLI documentation](docs/CLI.md).
 
-## Межі прототипу
+## Roadmap — not implemented
 
-- Обидва пристрої мають бути увімкнені й доступні в одній мережі.
-- Кожен, хто має код, може надсилати файли до зупинки приймання.
-  Окреме підтвердження кожної вхідної передачі ще не реалізоване.
-- Є індикатор зайнятості й підсумковий статус. Відсоток, швидкість, відновлення
-  після обриву, QR, передача папок і перегляд віддалених файлів — наступні етапи.
-- Скасування після завершення передачі не видаляє вже збережений файл.
-  Якщо підтвердження загубилося, перевір папку одержувача перед повтором.
-- Ліміт часу однієї передачі — 30 хвилин. Загальної дискової квоти немає.
-- Папка отримання має бути приватною й підтримувати hard links: APFS підходить,
-  FAT/exFAT — ні. При звичайному обриві й штатній зупинці тимчасові файли очищаються.
-  При аварійному вимкненні можуть лишитися `.nodi-*.part`.
-- З'єднання через різні інтернет-мережі ще не реалізоване.
+Windows, Linux, cross-network connections, folder transfer and resume.
 
-## Файли проєкту
+## License
 
-- `macos/Nodi.swift` — вікно, вибір файлу, кнопки, взаємодія з Go-процесами.
-- `macos/Info.plist` — налаштування macOS-застосунку.
-- `scripts/run-macos.sh` — збірка `.app` і запуск.
-- `cmd/nodi/main.go` — консольні команди та JSON-події для інтерфейсу.
-- `internal/transfer/` — протокол і тести передачі.
-- `scripts/check-core.py` — інтеграційна перевірка протоколу інтерфейсу.
-
-UI запускає Go-ядро як дочірній процес. Воно надсилає JSON-рядки з подіями
-`ready`, `sending`, `sent`, `received`, `error`, `fatal`.
-Секрет відправника передається через stdin, а не аргумент командного рядка.
-Приймання використовує вільний порт, щоб не конфліктувати зі старим CLI.
-
-Для перевірки:
-
-```bash
-go test -race ./...
-go vet ./...
-python3 scripts/check-core.py
-```
-
-Результати й неперевірені частини — у [TESTING.md](TESTING.md).
-
-Офіційна документація використаних API:
-[NSOpenPanel](https://developer.apple.com/documentation/appkit/nsopenpanel),
-[локальна мережа](https://developer.apple.com/documentation/bundleresources/information-property-list/nslocalnetworkusagedescription).
-
-## Android
-
-Застосунок Kotlin, minSdk 29, версія 1.0.
-На Mac відкрийте «Додати телефон», на Android — «Додати пристрій» та скануйте QR.
-Пошук пристроїв у локальній мережі використовує mDNS.
-Відкрийте `android/` в Android Studio або виконайте в цьому каталозі `./gradlew assembleDebug`.
-
-## Плани (ще не реалізовано)
-
-Windows, Linux, з'єднання між різними мережами, передача папок, відновлення перерваних передач.
-
-## Ліцензія
-
-Apache-2.0. Повний текст: [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
