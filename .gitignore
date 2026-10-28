@@ -1,0 +1,11 @@
+.DS_Store
+build/
+.nodi-backups/
+**/.nodi-backups/
+*.bak
+.idea/
+.gradle/
+.kotlin/
+local.properties
+*.jks
+*.keystore
