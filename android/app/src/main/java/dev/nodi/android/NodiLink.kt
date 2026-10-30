@@ -15,7 +15,8 @@ class NodiLink {
         cancelled = true
         socket?.let { s -> Thread({ try { s.setSoLinger(true,0); s.close() } catch (_: Exception) {} }, "Nodi-cancel-link").start() }
     }
-    fun connect(qr: NodiInvite, ownPin: String, ownPort: Int, deviceName: String): TrustedDevice {
+    fun connect(qr: NodiInvite, ownPin: String, ownPort: Int, deviceName: String,
+                confirm: ((String) -> Boolean)? = null): TrustedDevice {
         require(pairHex(ownPin) && ownPort in 1..65535)
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null,arrayOf<TrustManager>(object : X509TrustManager {
@@ -33,14 +34,31 @@ class NodiLink {
             s.enabledProtocols = arrayOf("TLSv1.3"); s.soTimeout = 15_000
             s.connect(InetSocketAddress(qr.host,qr.port),10_000); s.startHandshake()
             val secret = pairNonce()
-            pairWrite(s,JSONObject().put("action","link").put("token",qr.token).put("fingerprint",ownPin)
+            val client = pairNonce()
+            val transcript = "nodi-wifi-v1\n$client\n$ownPin\n$ownPort\n$secret"
+            val commitment = pairHash(transcript)
+            pairWrite(s,JSONObject().put("action",if(confirm == null) "link" else "wifi_link")
+                .put("token",if(confirm == null) qr.token else "")
+                .put("commit",commitment).put("fingerprint",ownPin)
                 .put("port",ownPort).put("secret",secret).put("name",deviceName.filter { !it.isISOControl() }.take(80)))
-            val response = pairRead(s.inputStream.buffered())
-            if (!response.optBoolean("ok")) throw ReceiveFailure("QR expired or connection rejected; show a new QR on Mac")
+            val input = s.inputStream.buffered()
+            if (confirm != null) {
+                val challenge = pairRead(input)
+                if (!challenge.optBoolean("pending") || !pairHex(challenge.optString("nonce")))
+                    throw ReceiveFailure(challenge.optString("error", "pairing unavailable"))
+                pairWrite(s, JSONObject().put("nonce",client))
+                s.soTimeout = 70_000
+                val allow = confirm(pairCompare(qr.fingerprint.hex(),transcript,challenge.getString("nonce")))
+                if (cancelled) throw ReceiveFailure("pairing cancelled")
+                pairWrite(s,JSONObject().put("allow",allow))
+                if (!allow) throw ReceiveFailure("pairing declined")
+            }
+            val response = pairRead(input)
+            if (!response.optBoolean("ok")) throw ReceiveFailure(response.optString("error","connection rejected"))
             check(!cancelled)
             val host = qr.host.hostAddress ?: throw ReceiveFailure("missing address")
             val endpoint = if (host.contains(':')) "[$host]:${qr.port}" else "$host:${qr.port}"
-            return TrustedDevice("Nodi Mac",endpoint,qr.fingerprint.hex(),secret)
+            return TrustedDevice(response.optString("name", "Mac").filter { !it.isISOControl() }.take(80),endpoint,qr.fingerprint.hex(),secret)
         } finally { socket = null; try { s.soTimeout = 1000; s.close() } catch (_: Exception) {} }
     }
 }

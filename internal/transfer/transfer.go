@@ -158,7 +158,7 @@ func receive(c net.Conn, inbox, token string, maxBytes int64, pin string, approv
 		return "", err
 	}
 	if book != nil {
-		if handled, e := book.HandleControl(c, h); handled {
+		if handled, e := book.HandleControl(c, h, r); handled {
 			return "", e
 		}
 		if !book.Authorize(h.Token, c) {

@@ -27,7 +27,7 @@ class NodiAdvertiser(context: Context, listenPort: Int, pin: String) {
     }
     init {
         val info = NsdServiceInfo().apply {
-            serviceName = "Nodi ${android.os.Build.MODEL}".take(45)
+            serviceName = nodiDeviceName(context).take(45)
             serviceType = SERVICE
             this.port = listenPort
             setAttribute("v", "1")

@@ -17,7 +17,7 @@ import (
 	"unicode"
 )
 
-type PairRequest struct{ ID, Name, Compare string }
+type PairRequest struct{ ID, Name, Compare, Fingerprint string }
 type PairHandler func(PairRequest) bool
 
 func hex32(s string) bool {

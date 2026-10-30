@@ -68,11 +68,25 @@ class MainActivity : Activity() {
     private var alive = true
     private var busy = false
     private var selecting = false
+    private var selectionEpoch = 0
     private var scanning = false
     private var pairing = false
     private var pairClient: NodiLink? = null
+    private var wifiDialog: android.app.AlertDialog? = null
+    private var wifiDecision: java.util.concurrent.CountDownLatch? = null
+    private var foreground = false
+    private val discoveryPromptPins = mutableSetOf<String>()
+    private var discoveryPrompt: android.app.AlertDialog? = null
+    private var activeTab = 0
+    private lateinit var connectionColumn: LinearLayout
+    private lateinit var connectTab: Button
+    private lateinit var sendTarget: TextView
     private lateinit var deviceBook: DeviceBook
     private lateinit var forgetButton: Button
+    private var connectionPending = false
+    private var pendingPeer: String? = null
+    private var pendingKnock: Triple<String,String,Int>? = null
+    private var knockUntil = 0L
     private var scanAfterReady = false
     private val devicesChanged: () -> Unit = { ui { renderNearby() } }
     private var discovery: NodiDiscovery? = null
@@ -80,7 +94,6 @@ class MainActivity : Activity() {
     private var nearbyAll: List<NearbyDevice> = emptyList()
     private var nearbyTitles: List<String> = emptyList()
     private lateinit var nearbyPicker: Spinner
-    private lateinit var nearbyConnect: Button
     private lateinit var nearbyRefresh: Button
     private lateinit var nearbyHint: TextView
                 private var qrDialog: android.app.AlertDialog? = null
@@ -120,6 +133,10 @@ class MainActivity : Activity() {
         receiverState = value
         renderReceiver()
         renderNearby()
+        if (value.active && value.invites.isNotEmpty()) {
+            connectionPending = false
+            pendingPeer?.let { pin -> pendingPeer = null; pairNearby(pin) }
+        }
         animateTransfer()
         if(value.transferring)previewKey=""
         if(value.status.startsWith("Готово —") && value.detail != previewKey){previewKey=value.detail;receivedPreview(value.detail,value.total)}
@@ -132,7 +149,14 @@ class MainActivity : Activity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             receiverService = (binder as NodiReceiveService.LocalBinder).service
             receiverService?.observe(receiveObserver)
-            if (scanAfterReady && !receiverState.active && folderTree != null) requestReceive()
+            receiverService?.onConnectionRequest = { host, pin, port ->
+                if (foreground && activeTab == 0 && !pairing && !busy) {
+                    pendingKnock = Triple(host,pin,port)
+                    knockUntil = System.currentTimeMillis() + 10_000
+                    consumeKnock()
+                }
+            }
+            if (scanAfterReady || connectionPending) requestConnection()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             receiverService = null
@@ -161,6 +185,7 @@ class MainActivity : Activity() {
         folderTree = savedTree?.let { Uri.parse(it) }
         showingReceive = savedInstanceState?.getBoolean("show_receive")
             ?: intent.getBooleanExtra("show_receive", false)
+        activeTab = savedInstanceState?.getInt("active_tab") ?: if(showingReceive) 1 else 0
         previewKey=savedInstanceState?.getString("preview_key") ?: ""
         buildScreen()
         if(!uiPrefs.getBoolean("setup",false)) setup(true)
@@ -234,7 +259,7 @@ class MainActivity : Activity() {
             clipToPadding = true
         }
         root.addView(scroll, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply { bottomMargin = dp(76) })
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(24))
@@ -263,9 +288,14 @@ class MainActivity : Activity() {
         header.addView(settings,LinearLayout.LayoutParams(dp(44),dp(44)))
         column.addItem(header,0)
         column.addItem(label("Файли поруч",13f,MUTED),0)
-        nearbyRefresh = button("Знайти у Wi-Fi", true) { startDiscovery(true) }
+        connectionColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addItem(connectionColumn, 0)
+        nearbyRefresh = button("Знайти у Wi-Fi", true) {
+            startDiscovery(true)
+            requestConnection()
+        }
         icon(nearbyRefresh, "wifi", BACKGROUND)
-        column.addItem(nearbyRefresh, 18, dp(48))
+        connectionColumn.addItem(nearbyRefresh, 18, dp(48))
         val deviceCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = panelBackground(CARD)
             setPadding(dp(16), dp(16), dp(16), dp(16))
@@ -279,9 +309,7 @@ class MainActivity : Activity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
         deviceCard.addItem(nearbyPicker, 4, dp(48))
-        nearbyConnect = button("Вибрати") { pairNearby() }.apply { visibility = View.GONE }
-        deviceCard.addItem(nearbyConnect, 0)
-        scanButton = button("Додати пристрій") { scanInvite() }; icon(scanButton,"qr",TEXT)
+        scanButton = button("Сканувати QR") { scanInvite() }; icon(scanButton,"qr",TEXT)
         forgetButton = button("") { forgetDevice() }.apply { contentDescription=tr("Видалити") }; icon(forgetButton, "trash", MUTED)
         val deviceActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         deviceActions.gravity=Gravity.END
@@ -293,18 +321,26 @@ class MainActivity : Activity() {
         deviceActions.removeView(forgetButton);deviceHeader.addView(forgetButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(scanButton,8,dp(44))
-        column.addItem(deviceCard, 16)
+        connectionColumn.addItem(deviceCard, 16)
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
-        sendTab = button("Надіслати") { showMode(false) }
-        receiveTab = button("Отримати") { showMode(true) }
-        modes.addView(sendTab, LinearLayout.LayoutParams(0, dp(44), 1f))
-        modes.addView(receiveTab, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(4) })
-        column.addItem(modes, 16)
+        connectTab = button("Підключення") { showTab(0) }
+        receiveTab = button("Отримання") { showTab(1) }
+        sendTab = button("Надсилання") { showTab(2) }
+        for (tab in listOf(connectTab, receiveTab, sendTab)) {
+            tab.textSize = 12f
+            tab.setPadding(dp(4), 0, dp(4), 0)
+            modes.addView(tab, LinearLayout.LayoutParams(0, dp(52), 1f))
+        }
+        root.addView(modes, FrameLayout.LayoutParams(-1, dp(60), Gravity.BOTTOM).apply {
+            setMargins(dp(12), 0, dp(12), dp(8))
+        })
 
         sendColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         receiveColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         column.addItem(sendColumn, 0)
         column.addItem(receiveColumn, 0)
+        sendTarget = label("Вибери пристрій у вкладці «Підключення»", 13f, MUTED)
+        sendColumn.addItem(sendTarget, 16)
 
         val fileCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -347,10 +383,20 @@ class MainActivity : Activity() {
         sendButton = button("Надіслати", true) { requestSend() }; icon(sendButton, "send", BACKGROUND)
         sendColumn.addItem(sendButton, 16, dp(48))
         cancelButton = button("Скасувати") {
-            cancelButton.isEnabled = false
-            status.text = "Зупиняю передачу…"
-            cancelBatch()
-            pairClient?.cancel()
+            selectionEpoch++
+            selecting = false
+            selected = emptyList()
+            fileLabel.text = tr("Вибери файл для передачі")
+            fileLabel.contentDescription = fileLabel.text
+            detail.text = ""
+            if (busy || pairing) {
+                status.text = "Зупиняю передачу…"
+                cancelBatch()
+                pairClient?.cancel()
+            } else {
+                status.text = tr("Вибір файлів очищено")
+            }
+            renderBusy()
         }.apply { visibility = View.GONE }
         sendColumn.addItem(cancelButton, 10, dp(46))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -364,7 +410,7 @@ class MainActivity : Activity() {
         sendColumn.addItem(status, 16)
         sendColumn.addItem(detail, 6)
         buildReceiveScreen()
-        showMode(showingReceive)
+        showTab(activeTab)
         setContentView(root)
         if (Build.VERSION.SDK_INT >= 30) {
             window.insetsController?.setSystemBarsAppearance(0,
@@ -388,12 +434,11 @@ class MainActivity : Activity() {
         code.isEnabled = !disabled
         sendButton.isEnabled = !disabled
         sendButton.alpha = if (disabled) 0.5f else 1f
-        nearbyConnect.isEnabled = !disabled && nearby.isNotEmpty()
         forgetButton.isEnabled = !pairing && !selecting && !scanning && nearby.isNotEmpty()
         nearbyRefresh.isEnabled = !disabled
         nearbyPicker.isEnabled = !disabled
-        cancelButton.visibility = if (busy || pairing) View.VISIBLE else View.GONE
-        cancelButton.isEnabled = busy || pairing
+        cancelButton.visibility = if (busy || pairing || selecting || selected.isNotEmpty()) View.VISIBLE else View.GONE
+        cancelButton.isEnabled = busy || pairing || selecting || selected.isNotEmpty()
         progress.visibility = if (busy || pairing) View.VISIBLE else View.GONE
         if (busy || pairing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -402,18 +447,9 @@ class MainActivity : Activity() {
 
     private fun scanInvite() {
         if (busy || selecting || scanning || pairing) return
-        if (folderTree == null) {
-            scanAfterReady = true
-            showMode(true)
-            receiverDetail.text = "Для зв’язку в обидва боки спочатку вибери папку збереження, потім натисни «Додати пристрій»."
-            receiverPick.performClick()
-            return
-        }
         if (!receiverState.active || receiverState.invites.isEmpty()) {
             scanAfterReady = true
-            showMode(true)
-            receiverDetail.text = "Запускаю приймання, щоб після сканування працювали обидва напрямки."
-            requestReceive()
+            requestConnection()
             return
         }
         scanning = true
@@ -484,6 +520,7 @@ class MainActivity : Activity() {
         if (requestCode != PICK_FILE || resultCode != RESULT_OK) return
         val uris=(data?.clipData?.let { clip -> (0 until clip.itemCount).map {clip.getItemAt(it).uri} } ?: listOfNotNull(data?.data)).distinct()
         if(uris.isEmpty())return
+        val epoch = ++selectionEpoch
         selecting = true
         status.text = "Читаю відомості про файл…"
         renderBusy()
@@ -503,6 +540,7 @@ class MainActivity : Activity() {
                 SelectedFile(uri, name, size)
                 }
                 ui {
+                    if (epoch != selectionEpoch) return@ui
                     selected = files
                     fileLabel.text = if(files.size==1)files[0].name else tr("Файлів: ")+files.size
                     fileLabel.contentDescription=files.joinToString("; "){it.name}
@@ -513,6 +551,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 ui {
+                    if (epoch != selectionEpoch) return@ui
                     selecting = false
                     status.text = "Не вдалося відкрити файл"
                     detail.text = friendlyError(error)
@@ -535,7 +574,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 404) {
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startDiscovery(false)
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { startDiscovery(false); if (connectionPending) requestConnection() }
             else nearbyHint.text = "Дозволь доступ до локальної мережі або скористайся QR."
             return
         }
@@ -628,21 +667,27 @@ class MainActivity : Activity() {
         }
     }
     private fun showMode(receive: Boolean) {
-        showingReceive = receive
-        for ((tab, selected) in listOf(sendTab to !receive, receiveTab to receive)) {
+        showTab(if (receive) 1 else 2)
+    }
+    private fun showTab(index: Int) {
+        activeTab = index
+        showingReceive = index == 1
+        for ((tab, selected) in listOf(connectTab to (index == 0), receiveTab to (index == 1), sendTab to (index == 2))) {
             tab.background = panelBackground(if (selected) Color.rgb(46,53,69) else CARD)
             tab.setTextColor(if (selected) TEXT else MUTED)
             tab.isSelected = selected
         }
-        sendColumn.visibility = if (receive) View.GONE else View.VISIBLE
-        receiveColumn.visibility = if (receive) View.VISIBLE else View.GONE
+        connectionColumn.visibility = if (index == 0) View.VISIBLE else View.GONE
+        receiveColumn.visibility = if (index == 1) View.VISIBLE else View.GONE
+        sendColumn.visibility = if (index == 2) View.VISIBLE else View.GONE
+        if (index == 0) offerNearbyDevice()
     }
     private fun buildReceiveScreen() {
         receiverFolder = label(getSharedPreferences("nodi_receive", MODE_PRIVATE).getString("folder_name", null)
             ?: "Папку ще не вибрано", 14f, MUTED)
         receiveColumn.addItem(receiverFolder, 18)
         receiverPick = button("Папка збереження") {
-            if (receiverState.active || choosingFolder) return@button
+            if (receiverState.acceptingFiles || choosingFolder) return@button
             val picker = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
@@ -654,7 +699,7 @@ class MainActivity : Activity() {
         }
         receiveColumn.addItem(receiverPick, 10, dp(48))
         receiverToggle = button("Увімкнути приймання", true) {
-            if (receiverState.active) receiverService?.stopReceiving() else requestReceive()
+            if (receiverState.acceptingFiles) receiverService?.disableFiles() else requestReceive()
         }
         receiveColumn.addItem(receiverToggle, 18, dp(54))
         receiverAddress = Spinner(this)
@@ -696,8 +741,8 @@ class MainActivity : Activity() {
         if (!::receiverToggle.isInitialized) return
         val connected = receiverService != null
         receiverToggle.isEnabled = connected && !choosingFolder && !receiverState.stopping
-        receiverToggle.text = if (receiverState.active) "Зупинити" else "Увімкнути приймання"
-        receiverPick.isEnabled = connected && !receiverState.active && !choosingFolder
+        receiverToggle.text = if (receiverState.acceptingFiles) "Зупинити" else "Увімкнути приймання"
+        receiverPick.isEnabled = connected && !receiverState.acceptingFiles && !choosingFolder
         if (receiverInvites != receiverState.invites) {
             qrDialog?.dismiss(); qrDialog = null
             receiverInvites = receiverState.invites
@@ -727,7 +772,7 @@ class MainActivity : Activity() {
     }
     private fun acceptFolder(data: Intent?) {
         val uri = data?.data ?: return
-        if (receiverState.active) return
+        if (receiverState.acceptingFiles) return
         try {
             NodiDocumentStore.requireLocalTree(uri)
             val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -762,8 +807,9 @@ class MainActivity : Activity() {
         }
     }
     private fun requestReceive() {
-        if (receiverState.active || choosingFolder || receiverService == null) return
-        if (folderTree == null) { receiverDetail.text = "Спочатку вибери папку збереження."; return }
+        if (receiverState.acceptingFiles || choosingFolder || receiverService == null) return
+        if (folderTree == null) { receiverPick.performClick(); return }
+        if (receiverState.active) { receiverService?.enableFiles(folderTree!!); return }
         if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(LOCAL_NETWORK), RECEIVE_NETWORK_PERMISSION)
             return
@@ -777,6 +823,21 @@ class MainActivity : Activity() {
         }
         launchReceiver()
     }
+    private fun requestConnection() {
+        connectionPending = true
+        if (receiverService == null || receiverState.stopping) return
+        if (receiverState.active) { connectionPending = false; return }
+        if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(LOCAL_NETWORK), 404)
+            return
+        }
+        try {
+            startForegroundService(Intent(this, NodiReceiveService::class.java).setAction(NodiReceiveService.START))
+        } catch (_: Exception) {
+            connectionPending = false; scanAfterReady = false; pendingPeer = null
+            nearbyHint.text = tr("Пошук недоступний · спробуй ще раз"); nearbyHint.visibility = View.VISIBLE
+        }
+    }
     private fun launchReceiver() {
         val tree = folderTree ?: return
         try {
@@ -788,6 +849,7 @@ class MainActivity : Activity() {
     }
     override fun onStart() {
         super.onStart()
+        foreground = true
         if(!uiPrefs.getBoolean("setup",false))return
         deviceBook.observe(devicesChanged)
         startDiscovery(false)
@@ -799,6 +861,7 @@ class MainActivity : Activity() {
         if (intent.getBooleanExtra("show_receive", false)) showMode(true)
     }
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("active_tab", activeTab)
         outState.putString("preview_key",previewKey)
         outState.putBoolean("show_receive", showingReceive)
         super.onSaveInstanceState(outState)
@@ -806,6 +869,7 @@ class MainActivity : Activity() {
 
 
     private fun startDiscovery(requestPermission: Boolean) {
+        if (requestPermission) discoveryPromptPins.clear()
         if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
             nearbyHint.text = "Дозволь пошук у Wi-Fi"
             if (requestPermission) requestPermissions(arrayOf(LOCAL_NETWORK), 404)
@@ -825,7 +889,7 @@ class MainActivity : Activity() {
             try {
                 val found = nearbyAll.firstOrNull { it.pin == peer.fingerprint }
                 val invite = NodiInvite.parse(peer.code())
-                NearbyDevice(peer.name, found?.host ?: invite.host, found?.port ?: invite.port, peer.fingerprint)
+                NearbyDevice(found?.name ?: peer.name, found?.host ?: invite.host, found?.port ?: invite.port, peer.fingerprint)
             } catch (_: Exception) { null }
         }
         val ownPin=runCatching {NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex()}.getOrNull()
@@ -846,22 +910,142 @@ class MainActivity : Activity() {
         nearbyPicker.visibility = if (nearby.isEmpty()) View.GONE else View.VISIBLE
         forgetButton.visibility = if (nearby.isEmpty()) View.GONE else View.VISIBLE
         if (::sendButton.isInitialized) { fillSelectedDevice(); renderBusy() }
+        consumeKnock()
+        offerNearbyDevice()
+    }
+    private fun consumeKnock() {
+        val knock = pendingKnock ?: return
+        if (System.currentTimeMillis() > knockUntil) { pendingKnock = null; return }
+        if (!foreground || activeTab != 0 || pairing || busy) return
+        val device = nearbyAll.firstOrNull { it.pin == knock.second && it.host.hostAddress == knock.first && it.port == knock.third } ?: return
+        pendingKnock = null
+        if (deviceBook.list().any { it.fingerprint == device.pin }) return
+        discoveryPrompt?.dismiss(); discoveryPrompt = null
+        discoveryPromptPins.add(device.pin)
+        pairNearby(device.pin, false)
+    }
+    private fun offerNearbyDevice() {
+        if (!foreground || activeTab != 0 || !receiverState.active || receiverState.invites.isEmpty() ||
+            busy || pairing || selecting || scanning || discoveryPrompt != null || wifiDialog != null) return
+        val saved = deviceBook.list().map { it.fingerprint }.toSet()
+        val ownPin = runCatching { NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex() }.getOrNull()
+        val device = nearbyAll.firstOrNull { it.pin != ownPin && it.pin !in saved && it.pin !in discoveryPromptPins } ?: return
+        discoveryPromptPins.add(device.pin)
+        discoveryPrompt = android.app.AlertDialog.Builder(this)
+            .setTitle(tr("Знайдено пристрій"))
+            .setMessage(device.name + "\n\n" + tr("З’єднати через Wi-Fi?"))
+            .setPositiveButton(tr("З’єднати")) { _, _ ->
+                val index = nearby.indexOfFirst { it.pin == device.pin }
+                if (index >= 0 && nearbyAll.any { it.pin == device.pin }) {
+                    nearbyPicker.setSelection(index)
+                    // Pass the chosen identity explicitly; spinner callbacks may run later.
+                    pairNearby(device.pin)
+                }
+            }
+            .setNegativeButton(tr("Не зараз"), null)
+            .create().also { dialog ->
+                dialog.setOnDismissListener { if (discoveryPrompt === dialog) discoveryPrompt = null }
+                dialog.show()
+            }
     }
     private fun fillSelectedDevice() {
         if (!::code.isInitialized || busy || pairing) return
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
+        if (::sendTarget.isInitialized) sendTarget.text = device?.name ?: tr("Вибери пристрій у вкладці «Підключення»")
         val peer = deviceBook.list().firstOrNull { it.fingerprint == device?.pin }
         forgetButton.visibility=if(peer==null)View.GONE else View.VISIBLE
-        if(peer==null || device==null){code.setText("");if(device!=null){nearbyHint.text="Скануй новий QR на Mac";nearbyHint.visibility=View.VISIBLE};return}
+        if(peer==null || device==null){code.setText("");return}
         val host = device.host.hostAddress ?: return
         val address = if (host.contains(':')) "[$host]:${device.port}" else "$host:${device.port}"
         code.setText(peer.code(address))
     }
-    private fun pairNearby() {
+    private fun pairNearby(pin: String? = null, initiatedHere: Boolean = true) {
         if (busy || selecting || scanning || pairing) return
-        fillSelectedDevice(); showMode(false)
-        status.text = if (code.text.isEmpty()) "Спочатку скануй QR Mac" else "Підключення збережене"
-        detail.text = "Вибери файл і натисни «Надіслати файл»."
+        val device = (if (pin == null) nearby.getOrNull(nearbyPicker.selectedItemPosition)
+            else nearby.firstOrNull { it.pin == pin }) ?: return
+        if (deviceBook.list().any { it.fingerprint == device.pin }) {
+            fillSelectedDevice(); showMode(false); return
+        }
+        val own = receiverState.invites.firstOrNull()?.let { NodiInvite.parse(it.code) }
+        if (own == null || !receiverState.active || receiverState.stopping) {
+            pendingPeer = device.pin
+            requestConnection()
+            return
+        }
+        val host = device.host.hostAddress ?: return
+        val endpoint = if (host.contains(':')) "[$host]:${device.port}" else "$host:${device.port}"
+        val raw = org.json.JSONObject().put("address",endpoint).put("token","0".repeat(64))
+            .put("fingerprint",device.pin).toString()
+        val invite = NodiInvite.parse("nodi1-" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(raw.toByteArray(Charsets.UTF_8)))
+        val link = NodiLink(); pairClient = link; pairing = true; renderBusy()
+        nearbyHint.text = tr("Підтвердь підключення на іншому пристрої")
+        nearbyHint.visibility = View.VISIBLE
+        worker.execute {
+            try {
+                val deadline = System.currentTimeMillis() + 60_000
+                var peer: TrustedDevice? = null
+                while (peer == null) {
+                    try {
+                        peer = link.connect(invite,own.fingerprint.hex(),own.port,nodiDeviceName(this)) {
+                            compare -> if (initiatedHere) { showPairCode(device.name, compare); true } else confirmWiFi(device.name,compare)
+                        }
+                    } catch (e: ReceiveFailure) {
+                        if (e.reason != "select phone on Mac first" || System.currentTimeMillis() >= deadline) throw e
+                        Thread.sleep(1000)
+                    }
+                }
+                deviceBook.remember(TrustedDevice(device.name, peer.address, peer.fingerprint, peer.token))
+                ui { showMode(false); status.text = tr("Підключення збережене"); showConnected(device.name) }
+            } catch (e: Exception) {
+                ui { if (!foreground) return@ui
+                    android.app.AlertDialog.Builder(this).setTitle(tr("Не вдалося з’єднати"))
+                    .setMessage(tr("Перевір вибір пристроїв і повтори. Або скористайся QR."))
+                    .setPositiveButton(tr("Готово"),null).show() }
+            } finally {
+                ui { wifiDialog?.dismiss(); wifiDialog=null; wifiDecision=null
+                    if(pairClient===link){pairClient=null;pairing=false;renderNearby();renderBusy()} }
+            }
+        }
+    }
+    private fun showPairCode(name: String, compare: String) {
+        ui {
+            if (!foreground || !pairing) return@ui
+            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("Підтвердь на іншому пристрої"))
+                .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
+                .setNegativeButton(tr("Скасувати")) { _, _ -> pairClient?.cancel() }
+                .setOnCancelListener { pairClient?.cancel() }.show()
+        }
+    }
+    private fun showConnected(name: String) {
+        if (!foreground) return
+        val root = screenRoot ?: return
+        val badge = label("✓  " + tr("З’єднано") + "\n" + name, 18f, TEXT, true).apply {
+            gravity = Gravity.CENTER; setPadding(dp(24),dp(24),dp(24),dp(24)); background = panelBackground(CARD)
+            elevation = dp(12).toFloat()
+        }
+        root.addView(badge, FrameLayout.LayoutParams(-1,dp(112),Gravity.CENTER).apply { leftMargin=dp(24); rightMargin=dp(24) })
+        if (!uiPrefs.getBoolean("reduce_motion",false)) {
+            badge.alpha=0f; badge.scaleX=.92f; badge.scaleY=.92f
+            badge.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240).start()
+        }
+        badge.postDelayed({ root.removeView(badge) },2200)
+        badge.announceForAccessibility(tr("З’єднано"))
+    }
+    private fun confirmWiFi(name: String, compare: String): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val answer = java.util.concurrent.atomic.AtomicBoolean(false)
+        ui {
+            if (!foreground) { latch.countDown(); return@ui }
+            wifiDecision = latch
+            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("З’єднати пристрої?"))
+                .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
+                .setPositiveButton(tr("З’єднати")) { _, _ -> answer.set(true); latch.countDown() }
+                .setNegativeButton(tr("Скасувати")) { _, _ -> latch.countDown() }
+                .setOnCancelListener { latch.countDown() }.create()
+            wifiDialog?.show()
+        }
+        return latch.await(60,java.util.concurrent.TimeUnit.SECONDS) && answer.get()
     }
     private fun connectScannedMac(qr: NodiInvite) {
         val own = receiverState.invites.firstOrNull()?.let { NodiInvite.parse(it.code) }
@@ -872,7 +1056,7 @@ class MainActivity : Activity() {
         showMode(false); status.text = "Зберігаю підключення в обидва боки…"; detail.text = ""; renderBusy()
         worker.execute {
             try {
-                val peer = link.connect(qr, own.fingerprint.hex(), own.port, "Nodi ${Build.MODEL}")
+                val peer = link.connect(qr, own.fingerprint.hex(), own.port, nodiDeviceName(this))
                 deviceBook.remember(peer)
                 ui { status.text = "Mac підключений"; detail.text = "Файли в обидва боки" }
             } catch (_: Exception) { ui {
@@ -977,43 +1161,130 @@ class MainActivity : Activity() {
         pulse?.cancel();progress.alpha=1f;receiverProgress.alpha=1f
         pulse=android.animation.ObjectAnimator.ofFloat(target,"alpha",1f,0.4f,1f).apply { duration=1200;repeatCount=android.animation.ValueAnimator.INFINITE;start() }
     }
+    private fun receivedMime(name: String, supplied: String?): String {
+        val extension = name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+        val inferred = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: when (extension) {
+                "apk" -> "application/vnd.android.package-archive"
+                "md", "log" -> "text/plain"
+                else -> null
+            }
+        return supplied?.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "binary/octet-stream" }
+            ?: inferred ?: "*/*"
+    }
     private fun receivedPreview(name: String, bytes: Long) {
-        if(!uiPrefs.getBoolean("previews",true)||name.isBlank())return
-        val root=screenRoot ?: return
-        previewCard?.let{root.removeView(it)}
-        val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(18),dp(20),dp(16));background=panelBackground(CARD);elevation=dp(16).toFloat() }
-        val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-        val image=android.widget.ImageView(this).apply{setImageResource(android.R.drawable.ic_menu_save);scaleType=android.widget.ImageView.ScaleType.CENTER_CROP;contentDescription=tr("Отримано")}
-        header.addView(image,LinearLayout.LayoutParams(dp(64),dp(64)))
-        val labels=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(16),0,0,0)}
-        labels.addItem(label("Отримано",12f,ACCENT,true),0)
-        labels.addItem(label(name,16f,TEXT,true).apply{maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END},6)
-        labels.addItem(label(formatBytes(bytes),12f,MUTED),4)
-        header.addView(labels,LinearLayout.LayoutParams(0,-2,1f));card.addItem(header,0)
-        val actions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-        var document:Uri?=null
-        val open=button("Відкрити",true){document?.let{uri->try{startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,contentResolver.getType(uri)?:"*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))}catch(_:Exception){android.widget.Toast.makeText(this,tr("Не вдалося відкрити файл"),android.widget.Toast.LENGTH_SHORT).show()}}}.apply{isEnabled=false}
-        val close=button("Закрити"){root.removeView(card);if(previewCard===card)previewCard=null}
-        actions.addView(open,LinearLayout.LayoutParams(0,dp(46),1f));actions.addView(close,LinearLayout.LayoutParams(0,dp(46),1f).apply{leftMargin=dp(8)});card.addItem(actions,14)
-        root.addView(card,FrameLayout.LayoutParams(-1,-2,android.view.Gravity.BOTTOM).apply{setMargins(dp(16),dp(16),dp(16),dp(16))});previewCard=card
-        if(!uiPrefs.getBoolean("reduce_motion",false)){card.translationY=dp(90).toFloat();card.alpha=0f;card.animate().translationY(0f).alpha(1f).setDuration(260).start()}
-        val tree=folderTree ?: return
-        worker.execute {
-            var found:Uri?=null;var thumb:android.graphics.Bitmap?=null
-            try {
-                val children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree))
-                contentResolver.query(children,arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME),null,null,null)?.use { cursor ->
-                    while(cursor.moveToNext())if(cursor.getString(1)==name){found=DocumentsContract.buildDocumentUriUsingTree(tree,cursor.getString(0));break}
-                }
-                found?.let { uri -> if(contentResolver.getType(uri)?.startsWith("image/")==true) {
-                    thumb=android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(contentResolver,uri)){decoder,info,_->
-                        val scale=maxOf(info.size.width,info.size.height).toFloat()/192f
-                        decoder.setTargetSize(maxOf(1,(info.size.width/scale.coerceAtLeast(1f)).toInt()),maxOf(1,(info.size.height/scale.coerceAtLeast(1f)).toInt()))
-                    }
-                } }
-            }catch(_:Exception){}
-            ui { if(previewCard===card){document=found;open.isEnabled=found!=null;thumb?.let{image.setImageBitmap(it)}} }
+        if (!uiPrefs.getBoolean("previews",true) || name.isBlank()) return
+        val root = screenRoot ?: return
+        previewCard?.let { root.removeView(it) }
+        val tree = folderTree
+        val resolver = applicationContext.contentResolver
+        val card = LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(18))
+            background=android.graphics.drawable.GradientDrawable().apply {
+                setColor(CARD);cornerRadius=dp(24).toFloat();setStroke(dp(1),Color.rgb(62,69,88))
+            }
+            elevation=dp(18).toFloat()
         }
+        val handle=View(this).apply { background=panelBackground(Color.rgb(66,73,91)) }
+        card.addView(handle,LinearLayout.LayoutParams(dp(30),dp(3)).apply { gravity=Gravity.CENTER_HORIZONTAL;bottomMargin=dp(12) })
+        val heading=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+        heading.addView(label("✓  "+tr("Файл отримано"),12f,Color.rgb(116,220,178),true),LinearLayout.LayoutParams(0,dp(32),1f))
+        heading.addView(button("×") { root.removeView(card);if(previewCard===card)previewCard=null }.apply {
+            contentDescription=tr("Закрити");textSize=22f
+        },LinearLayout.LayoutParams(dp(36),dp(36)))
+        card.addItem(heading,0)
+        val header=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+        val image=android.widget.ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_save)
+            imageTintList=android.content.res.ColorStateList.valueOf(ACCENT)
+            setPadding(dp(15),dp(15),dp(15),dp(15))
+            background=panelBackground(Color.rgb(38,44,60));clipToOutline=true
+            scaleType=android.widget.ImageView.ScaleType.CENTER_CROP;contentDescription=name
+        }
+        header.addView(image,LinearLayout.LayoutParams(dp(72),dp(72)))
+        val labels=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0) }
+        labels.addItem(label(name,17f,TEXT,true).apply {maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.MIDDLE},0)
+        val kind=name.substringAfterLast('.', "FILE").uppercase(java.util.Locale.ROOT).take(10)
+        labels.addItem(label(kind+"  ·  "+formatBytes(bytes),12f,MUTED),6)
+        header.addView(labels,LinearLayout.LayoutParams(0,-2,1f));card.addItem(header,8)
+        val hint=label("Готую файл…",12f,MUTED);card.addItem(hint,10)
+        var document:Uri?=null
+        var mime=receivedMime(name,null)
+        var resolving=false
+        fun launch(share:Boolean) {
+            val uri=document ?: return
+            val grant=Intent.FLAG_GRANT_READ_URI_PERMISSION
+            val intent=if(share) Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM,uri)
+                else Intent(Intent.ACTION_VIEW).setDataAndType(uri,mime)
+            intent.addFlags(grant)
+            intent.clipData=ClipData.newUri(resolver,name,uri)
+            val chooser=Intent.createChooser(intent,tr(if(share)"Поділитися" else "Відкрити файл")).apply {
+                addFlags(grant);clipData=intent.clipData
+            }
+            try { startActivity(chooser) }
+            catch (_: android.content.ActivityNotFoundException) {
+                hint.text=tr("Немає застосунку для цього формату. Спробуй поділитися файлом.");hint.visibility=View.VISIBLE
+            } catch (_: SecurityException) {
+                hint.text=tr("Немає доступу до файлу. Повторно вибери папку збереження.");hint.visibility=View.VISIBLE
+            } catch (_: Exception) {
+                hint.text=tr("Не вдалося відкрити файл");hint.visibility=View.VISIBLE
+            }
+        }
+        val actions=LinearLayout(this)
+        val open=button("Відкрити",true){}.apply {isEnabled=false}
+        val share=button("Поділитися"){}.apply {isEnabled=false}
+        actions.addView(open,LinearLayout.LayoutParams(0,dp(46),1f))
+        actions.addView(share,LinearLayout.LayoutParams(0,dp(46),1f).apply {leftMargin=dp(10)})
+        card.addItem(actions,14)
+        fun resolve(thenOpen:Boolean=false) {
+            if(resolving)return
+            resolving=true;hint.text=tr("Готую файл…");hint.visibility=View.VISIBLE
+            Thread({
+                var found:Uri?=null;var resolvedMime=receivedMime(name,null)
+                try {
+                    if(tree!=null) {
+                        val children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree))
+                        resolver.query(children,arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME),null,null,null)?.use { cursor ->
+                            while(cursor.moveToNext())if(cursor.getString(1)==name) {
+                                found=DocumentsContract.buildDocumentUriUsingTree(tree,cursor.getString(0));break
+                            }
+                        }
+                        found?.let { uri -> resolvedMime=receivedMime(name,runCatching{resolver.getType(uri)}.getOrNull()) }
+                    }
+                } catch (_: Exception) { }
+                val uri=found
+                ui {
+                    if(previewCard!==card)return@ui
+                    resolving=false;document=uri;mime=resolvedMime
+                    open.isEnabled=true;share.isEnabled=uri!=null
+                    open.text=tr(if(uri==null)"Спробувати ще раз" else "Відкрити")
+                    hint.text=tr("Файл недоступний. Перевір доступ до папки.")
+                    hint.visibility=if(uri==null)View.VISIBLE else View.GONE
+                    if(thenOpen && uri!=null)launch(false)
+                }
+                // A corrupt/unsupported thumbnail must never disable Open or Share.
+                if(uri!=null && resolvedMime.startsWith("image/")) {
+                    val thumb=runCatching {
+                        android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(resolver,uri)) { decoder,info,_ ->
+                            val scale=(maxOf(info.size.width,info.size.height)/256f).coerceAtLeast(1f)
+                            decoder.setTargetSize(maxOf(1,(info.size.width/scale).toInt()),maxOf(1,(info.size.height/scale).toInt()))
+                        }
+                    }.getOrNull()
+                    if(thumb!=null)ui { if(previewCard===card) {
+                        image.imageTintList=null;image.setPadding(0,0,0,0);image.setImageBitmap(thumb)
+                    } }
+                }
+            },"Nodi-file-preview").start()
+        }
+        open.setOnClickListener { if(document!=null)launch(false) else resolve(true) }
+        share.setOnClickListener { launch(true) }
+        root.addView(card,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply {setMargins(dp(16),dp(16),dp(16),dp(88))})
+        previewCard=card
+        if(!uiPrefs.getBoolean("reduce_motion",false)) {
+            card.translationY=dp(24).toFloat();card.alpha=0f
+            card.animate().translationY(0f).alpha(1f).setDuration(240).start()
+        }
+        resolve()
     }
 
     private fun formatBytes(bytes: Long): String = when {
@@ -1023,11 +1294,17 @@ class MainActivity : Activity() {
     }
     private fun ui(action: () -> Unit) { runOnUiThread { if (alive && !isDestroyed) action() } }
     override fun onStop() {
+        foreground = false
+        pendingKnock = null
+        discoveryPrompt?.dismiss(); discoveryPrompt = null
+        wifiDecision?.countDown()
+        wifiDialog?.dismiss(); wifiDialog=null
         pulse?.cancel();pulse=null
         deviceBook.removeObserver(devicesChanged)
         qrDialog?.dismiss(); qrDialog = null
         discovery?.stop(); discovery = null
         pairClient?.cancel()
+        receiverService?.onConnectionRequest = null
         receiverService?.removeObserver(receiveObserver)
         receiverService = null
         if (bindRequested) { unbindService(serviceConnection); bindRequested = false }

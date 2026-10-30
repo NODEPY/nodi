@@ -18,6 +18,7 @@ struct CoreEvent: Decodable {
     var id: String? = nil
     var name: String? = nil
     var compare: String? = nil
+    var pin: String? = nil
     var code: String? = nil
     var devices: [SavedDevice]? = nil
 }
@@ -122,10 +123,13 @@ final class CoreTask {
             DispatchQueue.main.async { [self] in try? inputHandle?.close(); inputHandle = nil; onExit(status) }
         }
     }
-    func command(_ type: String, pin: String? = nil) {
+    func command(_ type: String, pin: String? = nil, id: String? = nil, allow: Bool? = nil, address: String? = nil) {
         guard let handle = self.inputHandle, self.process.isRunning else { return }
-        var value: [String: String] = ["type": type]
+        var value: [String: Any] = ["type": type]
         if let pin = pin { value["pin"] = pin }
+        if let id = id { value["id"] = id }
+        if let allow = allow { value["allow"] = allow }
+        if let address = address { value["address"] = address }
         guard var data = try? JSONSerialization.data(withJSONObject: value) else { return }
         data.append(10); try? handle.write(contentsOf: data)
     }
@@ -214,6 +218,13 @@ final class NodiSetup:NSObject {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
+    private var wifiArmedPin: String?
+    private var wifiAlert: NSAlert?
+    private var wifiRequestID: String?
+    private var discoveryPromptPins = Set<String>()
+    private var discoveryPrompt: NSAlert?
+    private var pendingInbox: URL?
+    private var devicesLoaded = false
     private var qrPanel: NSPanel?
     private var logPanel: NSScrollView?
     private let lastEvent = NodiLabel(labelWithString: "")
@@ -259,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !self.preferences.bool(forKey:"nodi.setup") { self.showSetup(first:true) }
         self.makeMenu(); self.buildWindow()
         if let root=self.window.contentView { self.translateUI(root) }
-        self.browser.onChange = { [weak self] devices in self?.discovered = devices; self?.renderDevices() }
+        self.browser.onChange = { [weak self] devices in self?.discovered = devices; self?.renderDevices(); self?.offerNearbyDevice() }
         self.browser.onError = { [weak self] in self?.log("Пошук недоступний. Перевір дозвіл локальної мережі та Wi-Fi.") }
         self.browser.start()
         // Only paired-device capabilities can upload. New devices require a displayed QR.
@@ -317,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let title = self.label("nodi", size: 26, bold: true)
         let mark=NSImageView();mark.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");mark.imageScaling = .scaleProportionallyUpOrDown
         mark.widthAnchor.constraint(equalToConstant:40).isActive=true;mark.heightAnchor.constraint(equalToConstant:40).isActive=true
-        self.addButton.title = "Додати телефон"; self.forgetButton.title = "Видалити"
+        self.addButton.title = "QR"; self.forgetButton.title = "Видалити"
         self.chooseButton.title = "Вибрати файл"; self.sendButton.title = "Надіслати"; self.folderButton.title = "Змінити"
         let accent = NSColor(srgbRed: 160/255, green: 177/255, blue: 255/255, alpha: 1)
         for button in [refresh, self.sendButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .black; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 40).isActive = true }
@@ -437,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for peer in self.saved {
             let online = self.discovered.contains { $0.pin == peer.fingerprint }
             let status = NodiL(online ? "у мережі" : "не знайдено")
-            appendDevice(peer.name + " · " + status, peer.fingerprint)
+            appendDevice((self.discovered.first(where: { $0.pin == peer.fingerprint })?.name ?? peer.name) + " · " + status, peer.fingerprint)
         }
         for peer in self.discovered {
             appendDevice(peer.name + " · " + NodiL("Потрібне підключення"), peer.pin)
@@ -456,11 +467,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.deviceChanged()
     }
     @objc private func deviceChanged() {
+        let pin = self.devicePicker.selectedItem?.representedObject as? String
+        if self.wifiArmedPin != nil && self.wifiArmedPin != pin {
+            self.wifiArmedPin = nil
+            self.receiver?.command("wifi_select", pin: "*")
+        }
         if let peer = self.selectedDevice() {
             self.deviceHint.stringValue = self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : "Офлайн · увімкни приймання на телефоні"
         } else { self.deviceHint.stringValue = "Скануй новий QR телефоном" };self.setBusy(self.sender != nil)
     }
-    @objc private func refreshDevices() { self.browser.refresh() }
+    @objc private func refreshDevices() { self.discoveryPromptPins.removeAll(); self.browser.refresh(); if self.receiver == nil { self.toggleReceive() } else { self.receiver?.command("wifi_select", pin: "*") } }
+    private func offerNearbyDevice() {
+        guard self.receiver != nil, self.devicesLoaded, !self.stopping, self.discoveryPrompt == nil, self.qrPanel == nil,
+              self.wifiAlert == nil, self.window.attachedSheet == nil, self.sender == nil,
+              let device = self.discovered.first(where: { candidate in
+                  !self.saved.contains(where: { $0.fingerprint == candidate.pin }) &&
+                  !self.discoveryPromptPins.contains(candidate.pin)
+              }) else { return }
+        self.discoveryPromptPins.insert(device.pin)
+        let alert = NSAlert()
+        alert.messageText = NodiL("Знайдено пристрій")
+        alert.informativeText = device.name + "\n\n" + NodiL("З’єднати через Wi-Fi?")
+        alert.addButton(withTitle: NodiL("З’єднати"))
+        alert.addButton(withTitle: NodiL("Не зараз"))
+        self.discoveryPrompt = alert
+        alert.beginSheetModal(for: self.window) { [weak self] response in
+            guard let self = self else { return }
+            self.discoveryPrompt = nil
+            guard response == .alertFirstButtonReturn,
+                  self.discovered.contains(where: { $0.pin == device.pin }),
+                  let item = self.devicePicker.menu?.items.first(where: { ($0.representedObject as? String) == device.pin }) else { return }
+            self.devicePicker.select(item)
+            self.connectWiFi()
+        }
+    }
+    @objc private func connectWiFi() {
+        guard let pin = self.devicePicker.selectedItem?.representedObject as? String,
+              self.discovered.contains(where: { $0.pin == pin }) else {
+            self.deviceHint.stringValue = NodiL("Вибери пристрій у Wi-Fi")
+            return
+        }
+        self.wifiArmedPin = pin
+        self.deviceHint.stringValue = NodiL("Підтвердь підключення на іншому пристрої")
+        if self.receiver == nil { self.toggleReceive() }
+        else if let peer = self.discovered.first(where: { $0.pin == pin }) { self.receiver?.command("wifi_request", pin: pin, address: peer.address) }
+    }
+    private func showConnected(_ name: String) {
+        guard let root = self.window.contentView else { return }
+        let card = NSVisualEffectView(frame: NSRect(x: (root.bounds.width-320)/2, y: (root.bounds.height-110)/2, width:320, height:110))
+        card.material = .hudWindow; card.blendingMode = .withinWindow; card.state = .active
+        card.wantsLayer = true; card.layer?.cornerRadius = 20
+        let title = NSTextField(labelWithString: "✓  " + NodiL("З’єднано"))
+        title.font = .systemFont(ofSize:24, weight:.semibold); title.alignment = .center
+        title.frame = NSRect(x:16,y:58,width:288,height:32)
+        let subtitle = NSTextField(labelWithString:name); subtitle.alignment = .center
+        subtitle.lineBreakMode = .byTruncatingMiddle; subtitle.frame = NSRect(x:16,y:25,width:288,height:22)
+        card.addSubview(title); card.addSubview(subtitle); root.addSubview(card)
+        if !self.preferences.bool(forKey:"nodi.reduceMotion") {
+            card.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in context.duration = 0.25; card.animator().alphaValue = 1 }
+        }
+        DispatchQueue.main.asyncAfter(deadline:.now()+2.2) { card.removeFromSuperview() }
+    }
+    private func closeWiFiAlert() {
+        self.wifiRequestID = nil
+        if let alert = self.wifiAlert { self.window.endSheet(alert.window, returnCode: .abort) }
+        self.wifiAlert = nil
+    }
     private func updateInvites(_ values: [Invite]) {
         let previous = self.addressPicker.titleOfSelectedItem
         self.invites = values; self.addressPicker.removeAllItems()
@@ -474,32 +547,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.receiveButton.isEnabled = false; self.receiveStatus.stringValue = "Зупиняю…"; receiver.stop(); return
         }
         self.stopping = false; self.receiveButton.isEnabled = false; self.folderButton.isEnabled = false
+        self.devicesLoaded = false
         self.receiveStatus.stringValue = "Запускаю…"
         let task = CoreTask(); self.receiver = task
         do {
             try task.start(arguments: ["receive", "-json", "-listen", "0.0.0.0:0", "-out", self.inbox.path, "-devices", self.deviceDirectory.path], keepInput: true,
                 onEvent: { [weak self] event in self?.receiveEvent(event) }, onExit: { [weak self] _ in
                     guard let self = self else { return }
+                    self.closeWiFiAlert(); self.wifiArmedPin = nil
                     self.closeQR(); self.browser.advertise(nil); self.receiver = nil; self.invites = []; self.stopping = false; self.pendingQR = false
                     self.receiveStatus.stringValue = "Приймання вимкнене"; self.receiveButton.title = "Увімкнути приймання"; self.receiveButton.isEnabled = true; self.folderButton.isEnabled = true; self.setBusy(self.sender != nil)
+                    if let folder = self.pendingInbox {
+                        self.pendingInbox = nil
+                        self.applyInbox(folder)
+                        self.toggleReceive()
+                    }
                 })
         } catch { self.receiver = nil; self.receiveButton.isEnabled = true; self.folderButton.isEnabled = true; self.log(error.localizedDescription) }
     }
     private func receiveEvent(_ event: CoreEvent) {
         switch event.type {
         case "ready":
+            if let pin = self.wifiArmedPin, let peer = self.discovered.first(where: { $0.pin == pin }) {
+                self.receiver?.command("wifi_request", pin: pin, address: peer.address)
+            } else { self.receiver?.command("wifi_select", pin: "*") }
             self.updateInvites(event.invites ?? []); self.browser.advertise(self.invites.first)
             self.receiveStatus.stringValue = "Увімкнено · лише твої пристрої"; self.receiveButton.title = "Зупинити"; self.receiveButton.isEnabled = true
+            self.folderButton.isEnabled = true
             self.setBusy(self.sender != nil)
             if self.pendingQR { self.receiver?.command("new_qr") }
+            self.offerNearbyDevice()
+        case "pair_request":
+            if let prompt = self.discoveryPrompt {
+                self.window.endSheet(prompt.window, returnCode: .abort); self.discoveryPrompt = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.receiveEvent(event) }
+                return
+            }
+            if let pin = event.pin, pin == self.wifiArmedPin {
+                self.wifiArmedPin = nil
+                self.deviceHint.stringValue = (event.compare ?? "") + " · " + NodiL("Підтвердь підключення на іншому пристрої")
+                self.receiver?.command("pair_response", id: event.id, allow: true)
+                return
+            }
+            guard let id = event.id, let compare = event.compare,
+                  self.wifiAlert == nil, self.window.attachedSheet == nil else {
+                self.receiver?.command("pair_response", id: event.id, allow: false); return
+            }
+            let alert = NSAlert()
+            alert.messageText = NodiL("З’єднати пристрої?")
+            alert.informativeText = (event.name ?? "Nodi") + "\n\n" + compare + "\n\n" + NodiL("Коди на обох екранах мають збігатися")
+            alert.addButton(withTitle: NodiL("З’єднати")); alert.addButton(withTitle: NodiL("Скасувати"))
+            self.wifiAlert = alert; self.wifiRequestID = id
+            alert.beginSheetModal(for: self.window) { [weak self] response in
+                guard let self = self, self.wifiRequestID == id else { return }
+                self.wifiRequestID = nil; self.wifiAlert = nil
+                self.receiver?.command("pair_response", id: id, allow: response == .alertFirstButtonReturn)
+            }
+        case "pair_closed": self.closeWiFiAlert()
         case "qr_ready": self.updateInvites(event.invites ?? []); self.pendingQR = false; self.displayQR()
         case "devices":
+            let added = self.devicesLoaded ? (event.devices ?? []).filter { peer in !self.saved.contains(where: { $0.fingerprint == peer.fingerprint }) } : []
+            self.devicesLoaded = true
+            if let peer = added.first { self.showConnected(peer.name); self.receiver?.command("wifi_select", pin: "*") }
             let old = self.selectedDevice()?.fingerprint
             self.saved = event.devices ?? []
             if let pin = self.activeSendPin, !self.saved.contains(where: { $0.fingerprint == pin }) { self.cancelSend() }
             self.renderDevices()
             if let old = old, let i = self.saved.firstIndex(where: { $0.fingerprint == old }) { self.devicePicker.selectItem(at: i); self.deviceChanged() }
             self.closeQR()
+            self.offerNearbyDevice()
         case "forgotten": self.log("Пристрій видалено. Його попередній ключ більше не дозволяє надсилати сюди файли.")
         case "received":
             if let path=event.path { self.showReceived(URL(fileURLWithPath:path)) }
@@ -541,11 +657,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     @objc private func chooseFolder() {
+        guard !self.stopping, self.pendingInbox == nil else { return }
         let picker = NSOpenPanel(); picker.canChooseFiles = false; picker.canChooseDirectories = true; picker.canCreateDirectories = true
+        picker.directoryURL = self.inbox
+        if self.receiver != nil { picker.message = NodiL("Зміна папки зупинить поточне отримання та перезапустить приймач.") }
         picker.beginSheetModal(for: self.window) { [weak self] response in
             guard response == .OK, let url = picker.url, let self = self else { return }
-            self.inbox = url; self.preferences.set(url.path, forKey: "inbox"); self.folderLabel.stringValue = url.lastPathComponent; self.folderLabel.toolTip = url.path
+            guard FileManager.default.isWritableFile(atPath: url.path) else { self.log(NodiL("Немає доступу на запис до папки")); return }
+            guard url.standardizedFileURL != self.inbox.standardizedFileURL else { return }
+            if self.receiver != nil {
+                self.pendingInbox = url
+                self.folderButton.isEnabled = false
+                self.toggleReceive()
+            } else { self.applyInbox(url) }
         }
+    }
+    private func applyInbox(_ url: URL) {
+        self.inbox = url
+        self.preferences.set(url.path, forKey: "inbox")
+        self.folderLabel.stringValue = url.lastPathComponent
+        self.folderLabel.toolTip = url.path
     }
     @objc private func openInbox() { do { try FileManager.default.createDirectory(at: self.inbox, withIntermediateDirectories: true); NSWorkspace.shared.open(self.inbox) } catch { self.log(error.localizedDescription) } }
     @objc private func chooseFile() {
@@ -555,11 +686,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.selectedFiles=picker.urls
             self.fileLabel.stringValue=picker.urls.count==1 ? (picker.urls.first?.lastPathComponent ?? "") : NodiL("Файлів: ")+String(picker.urls.count)
             self.fileLabel.toolTip=picker.urls.map{$0.lastPathComponent}.joined(separator:"\n")
+            self.setBusy(false)
         }
     }
     private func setBusy(_ busy: Bool) {
         self.pulse(self.sendButton,enabled:busy)
-        self.chooseButton.isEnabled = !busy; self.sendButton.isEnabled = !busy && self.selectedDevice() != nil; self.cancelButton.isEnabled = busy
+        self.chooseButton.isEnabled = !busy; self.sendButton.isEnabled = !busy && self.selectedDevice() != nil; self.cancelButton.isEnabled = busy || !self.selectedFiles.isEmpty
         self.devicePicker.isEnabled = !busy && (!self.saved.isEmpty || !self.discovered.isEmpty)
         self.forgetButton.isEnabled = self.selectedDevice() != nil && self.receiver != nil && !self.stopping
         self.addButton.isEnabled = !self.stopping
@@ -603,7 +735,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         } catch {self.sendStatus.stringValue=error.localizedDescription+" · "+NodiL("Надіслано: ")+"\(self.batchSent)/\(self.batchTotal)";self.finishBatch()}
     }
-    @objc private func cancelSend(){self.sendCancelled=true;self.pendingFiles.removeAll();self.sender?.stop()}
+    @objc private func cancelSend(){
+        self.sendCancelled=true
+        self.pendingFiles.removeAll()
+        self.selectedFiles.removeAll()
+        self.fileLabel.stringValue=NodiL("Вибери файл")
+        self.fileLabel.toolTip=nil
+        if let sender=self.sender { sender.stop() }
+        else { self.sendStatus.stringValue=NodiL("Вибір файлів очищено"); self.setBusy(false) }
+    }
 
 }
 
@@ -714,6 +854,34 @@ func NodiL(_ original: String) -> String {
  return source
 }
 private let nodiWords: [String:[String]] = [
+"Готово до підключення":["Ready to connect", "Готово к подключению"],
+"Папка потрібна лише для отримання файлів.":["Choose a folder only when receiving files.", "Папка нужна только для получения файлов."],
+"Підключення залишається доступним.":["Connections remain available.", "Подключение остаётся доступным."],
+"Вибери папку збереження":["Choose a save folder", "Выбери папку сохранения"],
+"Очікую файли":["Waiting for files", "Ожидаю файлы"],
+"Підтвердь підключення на іншому пристрої":["Confirm on the other device", "Подтверди на другом устройстве"],
+"Підтвердь на іншому пристрої":["Confirm on the other device", "Подтверди на другом устройстве"],
+"З’єднано":["Connected", "Соединено"],
+"Знайдено пристрій":["Device found","Найдено устройство"],
+"З’єднати через Wi-Fi?":["Connect over Wi-Fi?","Соединить по Wi-Fi?"],
+"Не зараз":["Not now","Не сейчас"],
+"Вибір файлів очищено":["File selection cleared","Выбор файлов очищен"],
+"Зміна папки зупинить поточне отримання та перезапустить приймач.":["Changing the folder will stop any current incoming transfer and restart receiving.","Смена папки остановит текущее получение и перезапустит приёмник."],
+"Немає доступу на запис до папки":["No write access to this folder","Нет доступа на запись в папку"],
+"Підключення":["Connections","Подключения"],
+"Отримання":["Receive","Получение"],
+"Надсилання":["Send","Отправка"],
+"З’єднати":["Connect","Соединить"],
+"Сканувати QR":["Scan QR","Сканировать QR"],
+"З’єднати пристрої?":["Connect devices?","Соединить устройства?"],
+"Коди на обох екранах мають збігатися":["The codes on both screens must match","Коды на обоих экранах должны совпадать"],
+"Вибери пристрій у Wi-Fi":["Choose a nearby device","Выбери устройство в Wi-Fi"],
+"На телефоні вибери цей Mac і натисни «З’єднати»":["Select this Mac on your phone and tap Connect","Выбери этот Mac на телефоне и нажми «Соединить»"],
+"На Mac вибери телефон і натисни «З’єднати»":["Select your phone on Mac and click Connect","Выбери телефон на Mac и нажми «Соединить»"],
+"Вибери пристрій у вкладці «Підключення»":["Choose a device in Connections","Выбери устройство во вкладке «Подключения»"],
+"Увімкни приймання, потім повернись до підключення":["Start receiving, then return to Connections","Включи приём и вернись к подключениям"],
+"Не вдалося з’єднати":["Could not connect","Не удалось соединить"],
+"Перевір вибір пристроїв і повтори. Або скористайся QR.":["Check the selected devices and retry, or use QR.","Проверь выбор устройств и повтори или используй QR."],
 "Додати пристрій": ["Add device", "Добавить устройство"],
 "Потрібне підключення": ["Pair to connect", "Нужно подключение"],
 "Скануй новий QR на Mac": ["Scan a new QR on your Mac", "Сканируй новый QR на Mac"],

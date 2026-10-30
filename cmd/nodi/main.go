@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +25,7 @@ type invitation struct {
 	Code    string `json:"code"`
 }
 type event struct {
+	Pin     string          `json:"pin,omitempty"`
 	Devices []transfer.Peer `json:"devices,omitempty"`
 	ID      string          `json:"id,omitempty"`
 	Name    string          `json:"name,omitempty"`
@@ -152,6 +154,8 @@ func receive(args []string) error {
 	report(*machine, event{Type: "ready", Path: inbox, Invites: invites}, human.String())
 	approve := pairingBroker(ctx, *machine && *interactive && book == nil)
 	if book != nil {
+		wifi := &wifiBroker{}
+		book.WiFiApprove = func(p transfer.PairRequest) bool { return wifi.approve(ctx, p) }
 		book.Changed = func() { report(true, event{Type: "devices", Devices: book.Peers()}, "") }
 		book.Changed()
 		go func() {
@@ -159,13 +163,29 @@ func receive(args []string) error {
 			scanner.Buffer(make([]byte, 4096), 4096)
 			for scanner.Scan() {
 				var command struct {
-					Type string `json:"type"`
-					Pin  string `json:"pin"`
+					Address string `json:"address"`
+					Type    string `json:"type"`
+					Pin     string `json:"pin"`
+					ID      string `json:"id"`
+					Allow   bool   `json:"allow"`
 				}
 				if json.Unmarshal(scanner.Bytes(), &command) != nil {
 					continue
 				}
 				switch command.Type {
+				case "wifi_select":
+					book.SelectWiFi(command.Pin)
+				case "wifi_request":
+					book.SelectWiFi(command.Pin)
+					phonePin, address := command.Pin, command.Address
+					go func() {
+						ownPort, _ := strconv.Atoi(port)
+						if err := transfer.RequestWiFi(address, phonePin, pin, ownPort); err != nil {
+							report(true, event{Type: "error", Message: err.Error()}, "")
+						}
+					}()
+				case "pair_response":
+					wifi.respond(command.ID, command.Allow)
 				case "new_qr":
 					secret := book.RefreshQR()
 					codes := make([]invitation, 0, len(hosts))
@@ -301,9 +321,10 @@ func pairingBroker(ctx context.Context, enabled bool) transfer.PairHandler {
 		scanner.Buffer(make([]byte, 4096), 4096)
 		for scanner.Scan() {
 			var v struct {
-				Type  string `json:"type"`
-				ID    string `json:"id"`
-				Allow bool   `json:"allow"`
+				Address string `json:"address"`
+				Type    string `json:"type"`
+				ID      string `json:"id"`
+				Allow   bool   `json:"allow"`
 			}
 			if json.Unmarshal(scanner.Bytes(), &v) != nil || v.Type != "pair_response" {
 				continue

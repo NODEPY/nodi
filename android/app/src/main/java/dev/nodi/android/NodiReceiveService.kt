@@ -28,7 +28,7 @@ class PhoneInvite(val address: String, val code: String) {
 data class ReceiverState(val active: Boolean = false, val stopping: Boolean = false,
     val status: String = "Приймання вимкнене", val detail: String = "",
     val invites: List<PhoneInvite> = emptyList(), val bytes: Long = 0, val total: Long = 0,
-    val transferring: Boolean = false, val pairing: PairRequest? = null)
+    val acceptingFiles: Boolean = false, val transferring: Boolean = false, val pairing: PairRequest? = null)
 
 /** Explicitly started, visible foreground receiver. No boot start, no silent restart. */
 class NodiReceiveService : Service() {
@@ -57,6 +57,10 @@ class NodiReceiveService : Service() {
         @Volatile var allow = false
     }
     @Volatile private var decision: Decision? = null
+    private val destination = NodiConnectionStore()
+    var onConnectionRequest: ((String, String, Int) -> Unit)? = null
+    private val folderWorker = Executors.newSingleThreadExecutor()
+    private var folderGeneration = 0
     private var lastPair = 0L
     fun decide(id: String, allow: Boolean) {
         decision?.takeIf { it.request.id == id }?.let { it.allow = allow; it.latch.countDown() }
@@ -107,7 +111,7 @@ class NodiReceiveService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(NodiText.text(this,"Nodi — приймання файлів"))
+            .setContentTitle("Nodi")
             .setContentText(NodiText.text(this,text))
             .setContentIntent(open)
             .setOngoing(true)
@@ -121,7 +125,7 @@ class NodiReceiveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) { stopReceiving(); return START_NOT_STICKY }
         if (intent?.action != START) { stopSelf(startId); return START_NOT_STICKY }
-        if (session != null) return START_NOT_STICKY
+        if (session != null) { intent.getStringExtra(TREE)?.let { enableFiles(Uri.parse(it)) }; return START_NOT_STICKY }
         // Call before key generation, disk I/O or network setup.
         try {
             startForeground(NOTIFICATION, notification("Запускаю приймач…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -131,11 +135,8 @@ class NodiReceiveService : Service() {
             return START_NOT_STICKY
         }
         val tree = intent.getStringExtra(TREE)
-        if (tree == null) {
-            stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId)
-            publish(ReceiverState(status = "Спочатку вибери папку"))
-            return START_NOT_STICKY
-        }
+        destination.current = null
+        folderGeneration++
         val current = Session()
         session = current
         stopMessage = "Приймання зупинено"
@@ -147,8 +148,7 @@ class NodiReceiveService : Service() {
             try {
                 val addresses = localAddresses()
                 if (addresses.isEmpty()) throw ReceiveFailure("no local network")
-                NodiDocumentStore.cleanInterrupted(this, Uri.parse(tree))
-                val store = NodiDocumentStore(this, Uri.parse(tree))
+                val store = destination
                 val temp = File(cacheDir, "receive").apply { mkdirs() }
                 // The preceding session has finished; only our own private snapshots are removed.
                 temp.listFiles()?.filter { it.name.startsWith("nodi-receive-") && it.name.endsWith(".part") }?.forEach { it.delete() }
@@ -157,18 +157,21 @@ class NodiReceiveService : Service() {
                 if (current.cancelled.get()) return@execute
                 val receiver = NodiReceiver(identity.key, identity.certificate, temp, store, { event ->
                     main.post { if (session === current && !current.cancelled.get()) handleEvent(event) }
-                }, devices = NodiDeviceStore.get(this))
+                }, devices = NodiDeviceStore.get(this), onConnectionRequest = { host, pin, port ->
+                    main.post { if (session === current && !current.cancelled.get()) onConnectionRequest?.invoke(host, pin, port) }
+                })
                 current.receiver = receiver
                 if (current.cancelled.get()) { receiver.close(); return@execute }
                 val invites = addresses.map { PhoneInvite("$it:${receiver.port}", receiver.invite(it)) }
-                val folderName = store.folderName()
+
                 main.post {
                     if (session === current && !current.cancelled.get()) {
                         advertiser?.stop()
                         advertiser = NodiAdvertiser(this, receiver.port, receiver.fingerprint)
-                        publish(ReceiverState(active = true, status = "Очікую файли з Mac", invites = invites,
-                            detail = "Папка: $folderName. На телефоні скануй QR з Mac один раз. Потім вибирай збережений пристрій. Приймання вимкнеться через годину."))
-                        getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification("Очікую файли. Код доступний у Nodi."))
+                        publish(ReceiverState(active = true, status = "Готово до підключення", invites = invites,
+                            detail = "Папка потрібна лише для отримання файлів."))
+                        getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification("Готово до підключення"))
+                        if (tree != null) enableFiles(Uri.parse(tree))
                     }
                 }
                 receiver.run()
@@ -184,6 +187,8 @@ class NodiReceiveService : Service() {
                 val message = failure
                 main.post {
                     if (session === current) {
+                        destination.current = null
+                        folderGeneration++
                         session = null
                         advertiser?.stop(); advertiser = null
                         main.removeCallbacks(expire)
@@ -198,9 +203,36 @@ class NodiReceiveService : Service() {
         }
         return START_NOT_STICKY
     }
+    fun disableFiles() {
+        folderGeneration++
+        destination.current = null
+        publish(state.copy(acceptingFiles = false, status = "Приймання вимкнене", detail = "Підключення залишається доступним."))
+    }
+    fun enableFiles(tree: Uri) {
+        val generation = ++folderGeneration
+        val current = session ?: return
+        folderWorker.execute {
+            try {
+                val store = NodiConnectionStore.open(this, tree)
+                main.post {
+                    if (session === current && !current.cancelled.get() && generation == folderGeneration) {
+                        destination.current = store
+                        publish(state.copy(acceptingFiles = true, status = "Очікую файли", detail = "Папка: ${store.folderName()}"))
+                    }
+                }
+            } catch (e: Exception) {
+                main.post { if (generation == folderGeneration) {
+                    destination.current = null
+                    publish(state.copy(acceptingFiles = false, status = "Вибери папку збереження", detail = e.message ?: ""))
+                } }
+            }
+        }
+    }
     fun stopReceiving(message: String = "Приймання зупинено") {
         val current = session
         if (current == null) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return }
+        folderGeneration++
+        destination.current = null
         stopMessage = message
         current.cancelled.set(true)
         decision?.latch?.countDown()
@@ -251,6 +283,7 @@ class NodiReceiveService : Service() {
         main.removeCallbacks(expire)
         releaseWake()
         observers.clear()
+        folderWorker.shutdownNow()
         worker.shutdownNow()
         super.onDestroy()
     }

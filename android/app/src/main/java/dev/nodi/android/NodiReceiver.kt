@@ -50,10 +50,12 @@ class NodiReceiver(
     private val headerTimeoutMs: Int = 15_000,
     private val transferTimeoutMs: Long = 30 * 60 * 1000L,
     private val onPair: ((PairRequest, () -> Unit) -> Boolean)? = null,
-    private val devices: DeviceBook? = null
+    private val devices: DeviceBook? = null,
+    private val onConnectionRequest: ((String, String, Int) -> Unit)? = null
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private var lastUnauthenticatedError = 0L
+    private val lastKnock = java.util.concurrent.atomic.AtomicLong(0)
     private val active = CopyOnWriteArrayList<Closeable>()
     private val deadlines = Executors.newSingleThreadScheduledExecutor()
     private val token = ByteArray(32).also { SecureRandom().nextBytes(it) }.hex()
@@ -123,6 +125,19 @@ class NodiReceiver(
             val input = client.inputStream.buffered()
             val json = try { JSONObject(readLine(input)) }
             catch (_: Exception) { throw ReceiveFailure("invalid header") }
+            if (json.optString("action") == "wifi_request") {
+                val pin = json.optString("fingerprint")
+                val port = json.optInt("port")
+                if (!pairHex(pin) || port !in 1..65535 || onConnectionRequest == null)
+                    throw ReceiveFailure("pairing unavailable")
+                val now = System.currentTimeMillis()
+                val previous = lastKnock.get()
+                if (now - previous < 5000 || !lastKnock.compareAndSet(previous, now))
+                    throw ReceiveFailure("try again later")
+                onConnectionRequest.invoke(client.inetAddress.hostAddress ?: "", pin, port)
+                reply(client, true)
+                return
+            }
             if (devices != null && json.optString("action") in listOf("pair", "link"))
                 throw ReceiveFailure("scan Mac QR using Nodi on your phone")
             if (json.optString("action") == "pair") {

@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -32,14 +33,19 @@ func (p Peer) Invite() Invite {
 }
 
 type DeviceBook struct {
-	mu        sync.Mutex
-	dir       string
-	peers     []Peer
-	bootstrap string
-	expires   time.Time
-	active    map[net.Conn]string
-	lock      *os.File
-	Changed   func()
+	wifiSelected string
+	wifiUntil    time.Time
+	wifiBusy     bool
+	wifiOwnPin   string
+	WiFiApprove  PairHandler
+	mu           sync.Mutex
+	dir          string
+	peers        []Peer
+	bootstrap    string
+	expires      time.Time
+	active       map[net.Conn]string
+	lock         *os.File
+	Changed      func()
 }
 
 func atomicPrivate(path string, data []byte) error {
@@ -134,6 +140,7 @@ func OpenDeviceBook(dir string) (*DeviceBook, tls.Certificate, string, error) {
 		seen[p.Fingerprint] = true
 	}
 	pin := sha256.Sum256(identity.Certificate)
+	book.wifiOwnPin = hex.EncodeToString(pin[:])
 	return book, tls.Certificate{Certificate: [][]byte{identity.Certificate}, PrivateKey: key}, hex.EncodeToString(pin[:]), nil
 }
 func validPeer(p Peer) bool {
@@ -177,6 +184,11 @@ func (b *DeviceBook) Enroll(qr string, p Peer) error {
 		b.mu.Unlock()
 		return errors.New("QR expired; show a new QR on Mac")
 	}
+	return b.enrollLocked(p, true)
+}
+
+// Caller holds mu; every path releases it.
+func (b *DeviceBook) enrollLocked(p Peer, consumeQR bool) error {
 	if !validPeer(p) {
 		b.mu.Unlock()
 		return errors.New("invalid device")
@@ -201,8 +213,10 @@ func (b *DeviceBook) Enroll(qr string, p Peer) error {
 		return errors.New("cannot save device")
 	}
 	b.peers = next
-	b.bootstrap = ""
-	b.expires = time.Time{}
+	if consumeQR {
+		b.bootstrap = ""
+		b.expires = time.Time{}
+	}
 	var closeList []net.Conn
 	for c, pin := range b.active {
 		if pin == p.Fingerprint {
@@ -291,8 +305,10 @@ func cleanDeviceName(name string) string {
 	}
 	return string(r)
 }
-func (b *DeviceBook) HandleControl(c net.Conn, h header) (bool, error) {
+func (b *DeviceBook) HandleControl(c net.Conn, h header, r *bufio.Reader) (bool, error) {
 	switch h.Action {
+	case "wifi_link":
+		return true, b.receiveWiFi(c, r, h)
 	case "link":
 		host, _, e := net.SplitHostPort(c.RemoteAddr().String())
 		if e != nil {
@@ -302,7 +318,7 @@ func (b *DeviceBook) HandleControl(c net.Conn, h header) (bool, error) {
 		if e = b.Enroll(h.Token, p); e != nil {
 			return true, reject(c, e.Error())
 		}
-		return true, json.NewEncoder(c).Encode(map[string]any{"ok": true, "name": "Nodi Mac"})
+		return true, json.NewEncoder(c).Encode(map[string]any{"ok": true, "name": LocalDeviceName()})
 	case "pair":
 		return true, reject(c, "scan Mac QR using Nodi on your phone")
 	}
