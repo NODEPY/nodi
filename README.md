@@ -1,13 +1,49 @@
-# Nodi
+<div align="center">
+  <img src="android/app/src/main/assets/NodiMark.png" width="96" alt="Nodi">
+  <h1>Nodi</h1>
+  <p><strong>Your files. Your devices. One local network.</strong></p>
+  <p>Encrypted file transfer between macOS and Android — without cloud storage or accounts.</p>
 
-Direct encrypted file transfer between devices on the same local network.
-No cloud or accounts. Go core/CLI, native Swift/AppKit macOS app and Kotlin Android app.
-Alpha software; not independently security-audited. LAN only.
+[![Go checks](https://github.com/NODEPY/nodi/actions/workflows/go.yml/badge.svg)](https://github.com/NODEPY/nodi/actions/workflows/go.yml)
+![Status](https://img.shields.io/badge/status-alpha-f59e0b)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Android-6366f1)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
+[Downloads](https://github.com/NODEPY/nodi/releases) · [What's new](CHANGELOG.md) · [Testing](TESTING.md) · [CLI](docs/CLI.md) · [Security](SECURITY.md)
+</div>
+
+---
+
+## Meet Alpha 3
+
+Connect over Wi-Fi, confirm the matching code and start sharing. QR pairing stays
+available as an alternative. Android now has dedicated **Connections**, **Receive**
+and **Send** tabs, with refreshed received-file cards and Open/Share actions.
+
+| Connect | Transfer | Stay in control |
+| --- | --- | --- |
+| Discover devices on your LAN | Send multiple files in sequence | Confirm a new connection |
+| Start pairing from either device | Preview received images on Android | Cancel selection or transfer |
+| Keep QR as an alternative | Choose your destination folder | Remove saved devices |
+
+**Experimental alpha:** LAN only; no independent security audit.
+See the known limitations and test status below before relying on a build.
+
+## Quick start
+
+1. Install Nodi on your Mac and Android phone and connect both to the same local network.
+2. Open Nodi on both devices. Find the other device over Wi-Fi and start connecting.
+3. Compare the displayed codes and confirm on both screens, or scan the Mac QR on Android.
+4. On the receiving device, choose a folder and enable receiving. Select files on the sender.
+
+Android discovery and pairing work before selecting a receiving folder.
+Install the Android APK over your existing installation to retain app data when signatures match.
+The macOS archive contains `Nodi.app`; current builds are ad-hoc signed, not notarized.
 
 ## Versioning
 
-The next development release is **1.0.0-alpha.3** (tag `v1.0.0-alpha.3`).
-This does not mean a release has been published.
+This source version is **1.0.0-alpha.3** (tag `v1.0.0-alpha.3`).
+See Downloads for published builds.
 Use `MAJOR.MINOR.PATCH-alpha.N` for prereleases and `MAJOR.MINOR.PATCH` for stable releases.
 Android `versionName` matches the release version; `versionCode` increases for each distributed build (this build: 3).
 macOS uses numeric `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 6`;
