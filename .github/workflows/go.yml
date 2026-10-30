@@ -1,0 +1,32 @@
+name: Go checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Go ${{ matrix.go }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.22.x', stable]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - run: go version
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=120s ./...
+      - name: Repeat revocation race
+        run: go test -race -count=25 -timeout=120s ./internal/transfer -run '^TestForgetDuringCommit$'
+      - name: CLI integration
+        run: python3 scripts/check-core.py
