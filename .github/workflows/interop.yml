@@ -1,0 +1,32 @@
+name: Kotlin-Go interoperability
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Production Kotlin transport against Go CLI
+        run: bash android/gradlew -p tests/interop test --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interop-test-results
+          path: |
+            tests/interop/build/reports/tests/test/
+            tests/interop/build/test-results/test/

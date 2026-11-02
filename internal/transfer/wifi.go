@@ -116,8 +116,8 @@ func RequestWiFi(address, pin, ownPin string, ownPort int) error {
 	c, e := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", address, &tls.Config{
 		MinVersion: tls.VersionTLS13, InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("missing certificate")
+			if len(cs.PeerCertificates) != 1 {
+				return errors.New("receiver must present exactly one certificate")
 			}
 			actual := sha256.Sum256(cs.PeerCertificates[0].Raw)
 			if subtle.ConstantTimeCompare(actual[:], expected) != 1 {

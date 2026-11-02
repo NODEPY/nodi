@@ -34,7 +34,10 @@ type event struct {
 	Type    string          `json:"type"`
 	Message string          `json:"message,omitempty"`
 	Path    string          `json:"path,omitempty"`
+	Text    string          `json:"text,omitempty"`
 	Invites []invitation    `json:"invites,omitempty"`
+	Done    int64           `json:"done,omitempty"`
+	Total   int64           `json:"total,omitempty"`
 }
 
 var outputMu sync.Mutex
@@ -67,7 +70,7 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: nodi receive | nodi send -code CODE -file PATH")
+		return fmt.Errorf("usage: nodi receive | nodi send -code CODE -file PATH | nodi send-text [-stdin]")
 	}
 	switch args[0] {
 	case "pair":
@@ -76,8 +79,10 @@ func run(args []string) error {
 		return receive(args[1:])
 	case "send":
 		return send(args[1:])
+	case "send-text":
+		return sendText(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; use receive or send", args[0])
+		return fmt.Errorf("unknown command %q; use receive, send or send-text", args[0])
 	}
 }
 func receive(args []string) error {
@@ -99,6 +104,11 @@ func receive(args []string) error {
 		return err
 	}
 	if err = os.MkdirAll(inbox, 0700); err != nil {
+		return err
+	}
+	// A fresh receiver has no active transfers, so every leftover .nodi-*.part
+	// is from a previous crash and can be removed immediately.
+	if err = transfer.RemoveStaleParts(inbox, 0); err != nil {
 		return err
 	}
 	cert, pin, token, err := transfer.NewIdentity()
@@ -205,7 +215,7 @@ func receive(args []string) error {
 			}
 		}()
 	}
-	slots := make(chan struct{}, 2)
+	slots := transfer.NewSlots()
 	var workers sync.WaitGroup
 	// Cancel the connections before waiting for all cleanup to finish.
 	defer func() { stop(); workers.Wait() }()
@@ -217,42 +227,34 @@ func receive(args []string) error {
 			}
 			return err
 		}
-		select {
-		case slots <- struct{}{}:
-			workers.Add(1)
-			go func(c net.Conn) {
-				defer workers.Done()
-				defer func() { <-slots }()
-				finished := make(chan struct{})
-				defer close(finished)
-				go func() {
-					select {
-					case <-ctx.Done():
-						c.Close()
-					case <-finished:
-					}
-				}()
-				var path string
-				var err error
-				if book != nil {
-					path, err = transfer.ReceiveTrusted(c, inbox, *max*1024*1024, book)
-				} else {
-					path, err = transfer.ReceiveWithPairing(c, inbox, token, *max*1024*1024, pin, approve)
+		workers.Add(1)
+		go func(c net.Conn) {
+			defer workers.Done()
+			finished := make(chan struct{})
+			defer close(finished)
+			go func() {
+				select {
+				case <-ctx.Done():
+					c.Close()
+				case <-finished:
 				}
-				if err != nil {
-					if ctx.Err() == nil {
-						report(*machine, event{Type: "error", Message: err.Error(), Path: path}, "Transfer: "+err.Error())
-					}
-					return
+			}()
+			path, err := transfer.ServeText(c, inbox, token, *max*1024*1024, pin, approve, book, slots,
+				func(text string) error {
+					report(*machine, event{Type: "text_received", Text: text}, "Отримано текст:\n"+text)
+					return nil
+				})
+			if err != nil {
+				if ctx.Err() == nil && err != transfer.ErrBusy {
+					report(*machine, event{Type: "error", Message: err.Error(), Path: path}, "Transfer: "+err.Error())
 				}
-				if path == "" {
-					return
-				}
-				report(*machine, event{Type: "received", Path: path}, fmt.Sprintf("Received: %q", path))
-			}(c)
-		default:
-			c.Close()
-		}
+				return
+			}
+			if path == "" {
+				return
+			}
+			report(*machine, event{Type: "received", Path: path}, fmt.Sprintf("Received: %q", path))
+		}(c)
 	}
 }
 func send(args []string) error {
@@ -285,10 +287,64 @@ func send(args []string) error {
 		return err
 	}
 	report(*machine, event{Type: "sending"}, "Checking file and sending...")
-	if err = transfer.Send(invite, *file); err != nil {
+	if err = transfer.SendProgress(invite, *file, func(p transfer.Progress) {
+		if !*machine {
+			return
+		}
+		kind := "progress"
+		if p.Stage == "hashing" {
+			kind = "hashing"
+		}
+		report(true, event{Type: kind, Path: *file, Done: p.Done, Total: p.Total}, "")
+	}); err != nil {
 		return err
 	}
 	report(*machine, event{Type: "sent", Path: *file}, "Sent. Receiver verified and saved the file.")
+	return nil
+}
+
+func sendText(args []string) error {
+	flags := flag.NewFlagSet("send-text", flag.ContinueOnError)
+	code := flags.String("code", "", "secret code shown by the receiving device")
+	text := flags.String("text", "", "text or link to send")
+	stdin := flags.Bool("stdin", false, "read one JSON payload {code,text} from standard input")
+	machine := flags.Bool("json", false, "newline-delimited events for the desktop app")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *stdin {
+		if *code != "" || *text != "" {
+			return fmt.Errorf("choose either -stdin or -code with -text")
+		}
+		// The desktop app keeps secrets off the command line, where ps can read them.
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, 6*transfer.MaxTextBytes+8192+1))
+		if err != nil {
+			return err
+		}
+		if len(b) > 6*transfer.MaxTextBytes+8192 {
+			return fmt.Errorf("text payload is too long")
+		}
+		var payload struct {
+			Code string `json:"code"`
+			Text string `json:"text"`
+		}
+		if err = json.Unmarshal(b, &payload); err != nil {
+			return fmt.Errorf("invalid text payload")
+		}
+		*code, *text = payload.Code, payload.Text
+	}
+	if strings.TrimSpace(*text) == "" {
+		return fmt.Errorf("provide -text or -stdin with a non-empty text")
+	}
+	invite, err := transfer.ParseInvite(*code)
+	if err != nil {
+		return err
+	}
+	report(*machine, event{Type: "sending_text"}, "Sending text...")
+	if err = transfer.SendText(invite, *text); err != nil {
+		return err
+	}
+	report(*machine, event{Type: "text_sent"}, "Text sent. The other device confirmed it.")
 	return nil
 }
 

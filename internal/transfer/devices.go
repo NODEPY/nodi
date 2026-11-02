@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 )
@@ -81,7 +80,7 @@ func OpenDeviceBook(dir string) (*DeviceBook, tls.Certificate, string, error) {
 	if e != nil {
 		return nil, empty, "", e
 	}
-	if e = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+	if e = lockExclusive(lock); e != nil {
 		lock.Close()
 		return nil, empty, "", errors.New("Nodi device storage is already in use")
 	}

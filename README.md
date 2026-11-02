@@ -2,7 +2,7 @@
   <img src="android/app/src/main/assets/NodiMark.png" width="96" alt="Nodi">
   <h1>Nodi</h1>
   <p><strong>Your files. Your devices. One local network.</strong></p>
-  <p>Encrypted file transfer between macOS and Android — without cloud storage or accounts.</p>
+  <p>Encrypted file, text and link transfer between macOS and Android — without cloud storage or accounts.</p>
 
 [![Go checks](https://github.com/NODEPY/nodi/actions/workflows/go.yml/badge.svg)](https://github.com/NODEPY/nodi/actions/workflows/go.yml)
 ![Status](https://img.shields.io/badge/status-alpha-f59e0b)
@@ -17,14 +17,17 @@
 ## Meet Alpha 3
 
 Connect over Wi-Fi, confirm the matching code and start sharing. QR pairing stays
-available as an alternative. Android now has dedicated **Connections**, **Receive**
-and **Send** tabs, with refreshed received-file cards and Open/Share actions.
+available as an alternative. Android now has dedicated **Connections**, **Receive**,
+**Send** and **Text** tabs, with refreshed received-file cards and Open/Share actions.
+The Text tab sends a snippet or link to the paired device; received text is copied
+to the clipboard and kept in an in-memory history with Copy and Open actions.
 
 | Connect | Transfer | Stay in control |
 | --- | --- | --- |
 | Discover devices on your LAN | Send multiple files in sequence | Confirm a new connection |
-| Start pairing from either device | Preview received images on Android | Cancel selection or transfer |
+| Start pairing from either device | Send text and links from the clipboard | Cancel selection or transfer |
 | Keep QR as an alternative | Choose your destination folder | Remove saved devices |
+| Confirm on either screen | Preview received images on Android | Copy or open received text |
 
 **Experimental alpha:** LAN only; no independent security audit.
 See the known limitations and test status below before relying on a build.
@@ -35,6 +38,8 @@ See the known limitations and test status below before relying on a build.
 2. Open Nodi on both devices. Find the other device over Wi-Fi and start connecting.
 3. Compare the displayed codes and confirm on both screens, or scan the Mac QR on Android.
 4. On the receiving device, choose a folder and enable receiving. Select files on the sender.
+   Text and links do not need a destination folder; use the Text tab on Android or the
+   text card on Mac.
 
 Android discovery and pairing work before selecting a receiving folder.
 Install the Android APK over your existing installation to retain app data when signatures match.
@@ -56,9 +61,10 @@ Use a maintained Go toolchain for release builds; minimum-version compatibility 
 
 - QR pairing and Wi-Fi pairing with comparison-code confirmation; mDNS discovery.
 - A connection request can start on either device; the other shows a confirmation prompt.
-- Android tabs: Connections, Receive and Send.
+- Android tabs: Connections, Receive, Send and Text.
 - Discovery and pairing do not require an Android destination folder; receiving files does.
 - Sequential multi-file sending, cancellation and receiving into a chosen folder.
+- Text and link transfer up to 64 KiB, with automatic clipboard copy and a session history of the last 10 items.
 - Android received-file preview, Open and Share actions.
 - TLS 1.3, certificate fingerprint checks and SHA-256 verification.
 - Existing files are not overwritten; up to two incoming transfers and 2 GiB per file.
@@ -67,7 +73,8 @@ Use a maintained Go toolchain for release builds; minimum-version compatibility 
 
 macOS: macOS 12+, Go 1.22+ and Xcode Command Line Tools.
 Run `bash scripts/run-macos.sh`.
-The script currently hard-codes the MacOSX26.5 SDK path; another SDK installation may require adjusting it.
+The script detects the active macOS SDK with `xcrun` and uses a fresh compiler cache.
+If your compiler and default SDK differ, set `SDKROOT` to a compatible installed SDK.
 
 Android: minSdk 29, compileSdk/targetSdk 37. Open `android/` in Android Studio,
 or run `bash ./gradlew assembleDebug` inside that directory with Android SDK and compatible JDK installed.
@@ -85,10 +92,19 @@ On Mac the destination can be changed while the receiver is running; the receive
 ## Limitations
 
 No cross-network connection, folder transfer, resume or remote file browsing.
+Text history is kept in memory only and is lost when the app closes.
 The Go receiver requires a destination filesystem supporting hard links (for example APFS;
 FAT/exFAT do not). Android uses a document-provider folder and has separate permission semantics.
 macOS builds are ad-hoc signed, not notarized; Android alpha builds use debug signing.
 For known test gaps and the device checklist, see [TESTING.md](TESTING.md).
+
+## Sharing from other apps
+
+On Android, select one or more files in another app, choose **Share → Nodi**,
+then choose the paired device and tap **Send**. Text and links open the Text tab.
+Up to 100 shared files are accepted; the source app must grant read access.
+On Mac, drop up to 100 regular files onto the Nodi window, then click **Send**.
+Folders are not supported. New shares/drops do not replace an active transfer.
 
 ## Checks
 
@@ -96,6 +112,8 @@ For known test gaps and the device checklist, see [TESTING.md](TESTING.md).
 go vet ./...
 go test -race ./...
 python3 scripts/check-core.py
+# Kotlin ↔ Go transport integration (JDK 25, no Android SDK required):
+bash android/gradlew -p tests/interop test --no-daemon
 ```
 
 See [CLI documentation](docs/CLI.md). Windows, Linux desktop apps, cross-network

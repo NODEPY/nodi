@@ -51,7 +51,8 @@ class NodiReceiver(
     private val transferTimeoutMs: Long = 30 * 60 * 1000L,
     private val onPair: ((PairRequest, () -> Unit) -> Boolean)? = null,
     private val devices: DeviceBook? = null,
-    private val onConnectionRequest: ((String, String, Int) -> Unit)? = null
+    private val onConnectionRequest: ((String, String, Int) -> Unit)? = null,
+    private val onText: ((String) -> Unit)? = null
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private var lastUnauthenticatedError = 0L
@@ -162,6 +163,11 @@ class NodiReceiver(
             } else if (!MessageDigest.isEqual(supplied.toByteArray(Charsets.UTF_8), token.toByteArray(Charsets.UTF_8)))
                 throw ReceiveFailure("connection code rejected")
             authenticated = true
+            if (json.optString("action") == "text") {
+                stage = "TEXT"
+                receiveText(client, input, json, ::checkActive)
+                return
+            }
             stage = "METADATA"
             val name = json.opt("name") as? String ?: throw ReceiveFailure("invalid filename or file too large")
             val sizeValue = json.opt("size")
@@ -240,6 +246,40 @@ class NodiReceiver(
             deadline.cancel(false)
             snapshot?.delete()
         }
+    }
+
+    /** Text never needs a save folder and never creates a file. */
+    private fun receiveText(client: SSLSocket, input: InputStream, json: JSONObject, checkActive: () -> Unit) {
+        val deliver = onText ?: throw ReceiveFailure("text is not supported by this receiver")
+        val sizeValue = json.opt("size")
+        if (sizeValue !is Int && sizeValue !is Long) throw ReceiveFailure("invalid text size")
+        val size = (sizeValue as Number).toLong()
+        if (size !in 1..MAX_TEXT_BYTES.toLong()) throw ReceiveFailure("invalid text size")
+        val hash = (json.opt("sha256") as? String ?: "").lowercase()
+        if (!hash.matches(Regex("[a-f0-9]{64}"))) throw ReceiveFailure("invalid checksum")
+        reply(client, true)
+        client.soTimeout = 30_000
+        val body = ByteArray(size.toInt())
+        var read = 0
+        while (read < body.size) {
+            checkActive()
+            val count = input.read(body, read, body.size - read)
+            if (count < 0) throw ReceiveFailure("incomplete text")
+            read += count
+        }
+        val digest = MessageDigest.getInstance("SHA-256").digest(body).hex()
+        if (!MessageDigest.isEqual(digest.toByteArray(), hash.toByteArray()))
+            throw ReceiveFailure("checksum mismatch; text discarded")
+        val text = try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(body)).toString()
+        } catch (_: Exception) { throw ReceiveFailure("text is not valid UTF-8") }
+        if (text.any { it == '\u0000' || (Character.isISOControl(it) && it != '\n' && it != '\r' && it != '\t') })
+            throw ReceiveFailure("text contains unsupported characters")
+        deliver.invoke(text)
+        reply(client, true)
     }
 
     private fun readLine(input: InputStream): String {

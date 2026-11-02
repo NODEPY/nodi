@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — sharing shortcuts
+
+- Android: accept one or multiple files through Share → Nodi; shared text and links open the Text tab. Sending still requires an explicit tap.
+- macOS: drop up to 100 regular files into the window, with drop feedback and protection against replacing an active transfer.
+- Add standalone Kotlin ↔ Go TLS integration tests and CI reports.
+- macOS builds use a fresh module cache and support SDKROOT for compiler/SDK compatibility.
+
+
+## Unreleased
+
+### ✨ New
+
+- **Text and link transfer.** Paste a snippet or URL on one device, send it to a paired device, and copy or open it there.
+  Incoming text is copied to the clipboard automatically and kept in an in-memory history of the last 10 items.
+- **Android Text tab** with Paste from clipboard, Send text, Clear, and Copy/Open actions per history entry.
+- **macOS text card** with the same actions, plus the `nodi send-text` CLI command.
+- Text payloads are limited to 64 KiB, use the existing TLS 1.3 pinned channel, and never touch the receiving folder.
+
+### 🧪 Tests & CI
+
+- Go tests for text round-trips, handler rejection, unsupported-receiver rejection and payload validation.
+
 ## 1.0.0-alpha.3 — 2026-10-30
 
 ## Nodi Alpha 3 — Connect over Wi-Fi

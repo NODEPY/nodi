@@ -46,6 +46,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import javax.net.ssl.SSLHandshakeException
 
+
 class MainActivity : Activity() {
     private companion object {
         const val PICK_FILE = 301
@@ -109,6 +110,16 @@ class MainActivity : Activity() {
     private lateinit var sendButton: Button
     private lateinit var cancelButton: Button
 
+    private val textHistory get() = NodiTextHistory.snapshot()
+    private var texting = false
+    private lateinit var textTab: Button
+    private lateinit var textColumn: LinearLayout
+    private lateinit var textInput: EditText
+    private lateinit var textStatus: TextView
+    private lateinit var textSendButton: Button
+    private lateinit var textHint: TextView
+    private lateinit var textHistoryColumn: LinearLayout
+
     private var receiverService: NodiReceiveService? = null
     private var bindRequested = false
     private var receiverState = ReceiverState()
@@ -133,6 +144,9 @@ class MainActivity : Activity() {
         receiverState = value
         renderReceiver()
         renderNearby()
+        // The receiver records every message before acknowledging it, even while
+        // this activity is stopped. Rebinding only redraws; it never duplicates entries.
+        renderText()
         if (value.active && value.invites.isNotEmpty()) {
             connectionPending = false
             pendingPeer?.let { pin -> pendingPeer = null; pairNearby(pin) }
@@ -185,9 +199,10 @@ class MainActivity : Activity() {
         folderTree = savedTree?.let { Uri.parse(it) }
         showingReceive = savedInstanceState?.getBoolean("show_receive")
             ?: intent.getBooleanExtra("show_receive", false)
-        activeTab = savedInstanceState?.getInt("active_tab") ?: if(showingReceive) 1 else 0
+        activeTab = savedInstanceState?.getInt("active_tab") ?: if(intent.getBooleanExtra("show_text", false)) 3 else if(showingReceive) 1 else 0
         previewKey=savedInstanceState?.getString("preview_key") ?: ""
         buildScreen()
+        acceptShare(intent)
         if(!uiPrefs.getBoolean("setup",false)) setup(true)
         // Only old temporary snapshots owned by this app are cleaned after a crash.
         worker.execute {
@@ -326,9 +341,10 @@ class MainActivity : Activity() {
         connectTab = button("Підключення") { showTab(0) }
         receiveTab = button("Отримання") { showTab(1) }
         sendTab = button("Надсилання") { showTab(2) }
-        for (tab in listOf(connectTab, receiveTab, sendTab)) {
+        textTab = button("Текст") { showTab(3) }
+        for (tab in listOf(connectTab, receiveTab, sendTab, textTab)) {
             tab.textSize = 12f
-            tab.setPadding(dp(4), 0, dp(4), 0)
+            tab.setPadding(dp(2), 0, dp(2), 0)
             modes.addView(tab, LinearLayout.LayoutParams(0, dp(52), 1f))
         }
         root.addView(modes, FrameLayout.LayoutParams(-1, dp(60), Gravity.BOTTOM).apply {
@@ -337,8 +353,10 @@ class MainActivity : Activity() {
 
         sendColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         receiveColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        textColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         column.addItem(sendColumn, 0)
         column.addItem(receiveColumn, 0)
+        column.addItem(textColumn, 0)
         sendTarget = label("Вибери пристрій у вкладці «Підключення»", 13f, MUTED)
         sendColumn.addItem(sendTarget, 16)
 
@@ -410,6 +428,7 @@ class MainActivity : Activity() {
         sendColumn.addItem(status, 16)
         sendColumn.addItem(detail, 6)
         buildReceiveScreen()
+        buildTextScreen()
         showTab(activeTab)
         setContentView(root)
         if (Build.VERSION.SDK_INT >= 30) {
@@ -426,14 +445,194 @@ class MainActivity : Activity() {
         root.requestApplyInsets()
         renderBusy()
     }
+    private fun buildTextScreen() {
+        textHint = label("Вибери пристрій у вкладці «Підключення»", 13f, MUTED)
+        textColumn.addItem(textHint, 16)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = panelBackground(CARD)
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        card.addItem(label("ТЕКСТ І ПОСИЛАННЯ", 11f, MUTED, true), 0)
+        textInput = EditText(this).apply {
+            hint = "Встав текст або посилання"
+            textSize = 15f
+            setTextColor(TEXT)
+            setHintTextColor(MUTED)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 3
+            maxLines = 6
+            filters = arrayOf(InputFilter.LengthFilter(MAX_TEXT_BYTES))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = panelBackground(CARD)
+            isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
+        card.addItem(textInput, 10)
+        val paste = button("Вставити з буфера") { pasteText() }
+        icon(paste, "file", TEXT)
+        val clear = button("Очистити") { textInput.setText("") }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(paste, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(8) })
+        actions.addView(clear, LinearLayout.LayoutParams(0, dp(46), 1f))
+        card.addItem(actions, 12)
+        textSendButton = button("Надіслати текст", true) { sendText() }
+        icon(textSendButton, "send", BACKGROUND)
+        card.addItem(textSendButton, 12, dp(48))
+        textStatus = label("Текст і посилання йдуть напряму підключеному пристрою.", 12f, MUTED)
+        card.addItem(textStatus, 10)
+        textColumn.addItem(card, 14)
+        textHistoryColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        textColumn.addItem(textHistoryColumn, 14)
+        renderText()
+    }
+    private fun pasteText() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = clipboard.primaryClip
+        val value = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this).toString() else ""
+        if (value.isBlank()) { textStatus.text = "Буфер обміну порожній."; return }
+        if (value.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) {
+            textStatus.text = "Текст у буфері завеликий. Максимум — 64 КБ."
+            return
+        }
+        textInput.setText(value)
+        textInput.setSelection(textInput.text.length)
+        textStatus.text = "Готово до надсилання"
+    }
+    private fun sendText() {
+        if (busy || texting || pairing || scanning || selecting) return
+        if (Build.VERSION.SDK_INT < 29) {
+            textStatus.text = "Потрібен Android 10 або новіший для TLS 1.3."
+            return
+        }
+        val value = textInput.text.toString()
+        if (value.isBlank()) { textStatus.text = "Встав текст або посилання."; return }
+        if (value.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) {
+            textStatus.text = "Текст завеликий. Максимум — 64 КБ."
+            return
+        }
+        if (code.text.isEmpty()) {
+            textStatus.text = "Спочатку підключи пристрій."
+            scanInvite()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 37 && checkSelfPermission(LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(LOCAL_NETWORK), NETWORK_PERMISSION_REQUEST)
+            return
+        }
+        fillSelectedDevice()
+        val invite = try { parseSelectedInvite() } catch (error: Exception) {
+            textStatus.text = friendlyError(error)
+            return
+        }
+        val session = NodiTransfer()
+        texting = true; transfer = session; batchCancelled = false
+        textStatus.text = "Надсилаю текст…"
+        renderBusy()
+        worker.execute {
+            try {
+                session.sendText(invite, value) { update -> ui { textPhase(update) } }
+                ui {
+                    texting = false; transfer = null
+                    addTextEntry(value, incoming = false)
+                    textInput.setText("")
+                    textStatus.text = "Текст надіслано"
+                    renderBusy()
+                }
+            } catch (error: Exception) {
+                ui {
+                    texting = false; transfer = null
+                    textStatus.text = if (error is CancellationException) "Передачу зупинено"
+                        else friendlyError(error)
+                    renderBusy()
+                }
+            }
+        }
+    }
+    private fun textPhase(update: TransferProgress) {
+        textStatus.text = when (update.phase) {
+            TransferPhase.CONNECTING -> "Підключаюся до пристрою…"
+            TransferPhase.SENDING -> "Надсилаю текст…"
+            TransferPhase.CONFIRMING -> "Чекаю підтвердження…"
+            else -> textStatus.text
+        }
+    }
+    private fun copyText(value: String): Boolean = try {
+        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+            .setPrimaryClip(ClipData.newPlainText("Nodi", value))
+        true
+    } catch (_: Exception) { false }
+    private fun addTextEntry(value: String, incoming: Boolean) {
+        NodiTextHistory.add(value, incoming)
+        renderText()
+    }
+    private fun renderText() {
+        if (!::textHistoryColumn.isInitialized) return
+        textHistoryColumn.removeAllViews()
+        if (textHistory.isEmpty()) {
+            textHistoryColumn.addItem(label("Історія порожня. Надішли перший текст.", 12f, MUTED), 0)
+            return
+        }
+        textHistoryColumn.addItem(label("ОСТАННІ 10", 11f, MUTED, true), 0)
+        for (entry in textHistory) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = panelBackground(CARD)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+            }
+            card.addItem(label((if (entry.incoming) "↓ " else "↑ ") + entry.text.replace("\n", " "), 13f, TEXT).apply {
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, 0)
+            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+            val copy = button("Копіювати") {
+                textStatus.text = if (copyText(entry.text)) "Скопійовано" else "Не вдалося скопіювати текст"
+            }
+            actions.addView(copy, LinearLayout.LayoutParams(dp(124), dp(40)))
+            linkUri(entry.text)?.let { uri ->
+                val open = button("Відкрити") {
+                    try { startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    } catch (_: Exception) { textStatus.text = "Не вдалося відкрити посилання" }
+                }
+                actions.addView(open, LinearLayout.LayoutParams(dp(112), dp(40)).apply { leftMargin = dp(8) })
+            }
+            card.addItem(actions, 8)
+            textHistoryColumn.addItem(card, 8)
+        }
+    }
+    private fun linkUri(value: String): Uri? {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty() || trimmed.any { it.isWhitespace() }) return null
+        val uri = Uri.parse(trimmed)
+        if (uri.scheme?.lowercase() !in listOf("http", "https")) return null
+        if (uri.host.isNullOrEmpty()) return null
+        return uri
+    }
+    private fun parseSelectedInvite(): NodiInvite {
+        val invite = NodiInvite.parse(code.text.toString())
+        require(deviceBook.list().any { peer -> peer.token == invite.token && peer.fingerprint == invite.fingerprint.hex() }) {
+            "Підключення видалене. Скануй QR Mac знову."
+        }
+        require(!invite.host.isLoopbackAddress) {
+            "Це код для тесту на Mac. Скопіюй код під Wi-Fi адресою Mac."
+        }
+        return invite
+    }
+
     private fun renderBusy() {
-        val disabled = busy || selecting || scanning || pairing
+        val disabled = busy || texting || selecting || scanning || pairing
         pickButton.isEnabled = !disabled
         pasteButton.isEnabled = !disabled
         scanButton.isEnabled = !disabled
         code.isEnabled = !disabled
         sendButton.isEnabled = !disabled
         sendButton.alpha = if (disabled) 0.5f else 1f
+        if (::textSendButton.isInitialized) {
+            textSendButton.isEnabled = !disabled
+            textSendButton.alpha = if (disabled) 0.5f else 1f
+            textInput.isEnabled = !disabled
+        }
         forgetButton.isEnabled = !pairing && !selecting && !scanning && nearby.isNotEmpty()
         nearbyRefresh.isEnabled = !disabled
         nearbyPicker.isEnabled = !disabled
@@ -519,7 +718,11 @@ class MainActivity : Activity() {
         }
         if (requestCode != PICK_FILE || resultCode != RESULT_OK) return
         val uris=(data?.clipData?.let { clip -> (0 until clip.itemCount).map {clip.getItemAt(it).uri} } ?: listOfNotNull(data?.data)).distinct()
-        if(uris.isEmpty())return
+        selectUris(uris)
+    }
+
+    private fun selectUris(uris: List<Uri>) {
+        if (uris.isEmpty() || busy || scanning || pairing) return
         val epoch = ++selectionEpoch
         selecting = true
         status.text = "Читаю відомості про файл…"
@@ -560,6 +763,40 @@ class MainActivity : Activity() {
             }
         }
     }
+    /** URI grants belong to the delivered intent; do not request persistent access
+     * for ACTION_SEND. The existing sender snapshots content before transmission. */
+    @Suppress("DEPRECATION")
+    private fun acceptShare(shared: Intent): Boolean {
+        if (shared.action != Intent.ACTION_SEND && shared.action != Intent.ACTION_SEND_MULTIPLE) return false
+        if (busy || selecting || scanning || pairing) {
+            android.widget.Toast.makeText(this, tr("Заверши поточну дію та поділися ще раз."), android.widget.Toast.LENGTH_LONG).show()
+            return true
+        }
+        try {
+            val streams = if (shared.action == Intent.ACTION_SEND_MULTIPLE)
+                shared.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else listOfNotNull(shared.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            val clips = shared.clipData?.let { clip ->
+                (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+            }.orEmpty()
+            val uris = (streams + clips).distinct()
+            if (uris.isNotEmpty()) {
+                require(uris.size <= 100 && uris.all { it.scheme == "content" })
+                showTab(2)
+                selectUris(uris)
+            } else {
+                val value = shared.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+                require(value.isNotBlank() && value.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES)
+                showTab(3)
+                textInput.setText(value)
+                textStatus.text = "Готово до надсилання"
+            }
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(this, tr("Не вдалося прийняти файли або текст. Вибери до 100 файлів або текст до 64 КБ."), android.widget.Toast.LENGTH_LONG).show()
+        }
+        return true
+    }
+
     private fun requestSend() {
         if (busy || selecting || scanning || pairing) return
         if(code.text.isEmpty()){scanInvite();return}
@@ -589,10 +826,12 @@ class MainActivity : Activity() {
             return
         }
         if (requestCode == NETWORK_PERMISSION_REQUEST) {
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startTransfer()
-            else {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                if (selected.isEmpty() && textInput.text.isNotBlank()) sendText() else startTransfer()
+            } else {
                 status.text = "Потрібен доступ до локальної мережі"
                 detail.text = "Дозволь доступ у налаштуваннях дозволів Nodi, щоб підключитися до Mac."
+                if (::textStatus.isInitialized) textStatus.text = "Потрібен доступ до локальної мережі"
             }
         }
     }
@@ -601,10 +840,7 @@ class MainActivity : Activity() {
         val files = selected.toList(); if(files.isEmpty())return
         fillSelectedDevice()
         val invite = try {
-            NodiInvite.parse(code.text.toString()).also {
-                require(deviceBook.list().any { peer -> peer.token == it.token && peer.fingerprint == it.fingerprint.hex() }) { "Підключення видалене. Скануй QR Mac знову." }
-                require(!it.host.isLoopbackAddress) { "Це код для тесту на Mac. Скопіюй код під Wi-Fi адресою Mac." }
-            }
+            parseSelectedInvite()
         } catch (error: Exception) {
             status.text = "Перевір код з’єднання"
             detail.text = friendlyError(error)
@@ -661,6 +897,10 @@ class MainActivity : Activity() {
             message.contains("ECONNREFUSED") || message.contains("Connection refused") -> "Mac не приймає з’єднання. Увімкни приймання й скопіюй новий код."
             message.contains("ENETUNREACH") || message.contains("timed out", true) || message.contains("EHOSTUNREACH") -> "Mac недоступний. Перевір спільний Wi-Fi, мережеву адресу й дозвіл фаєрвола для Nodi."
             message.contains("ENOSPC") -> "На телефоні немає місця для тимчасової копії. Звільни місце або вибери менший файл."
+            message.contains("text is not supported") -> "Цей пристрій не приймає текст. Онови Nodi на Mac."
+            message.contains("text must be between") -> "Текст завеликий. Максимум — 64 КБ."
+            message.contains("text is not valid UTF-8") -> "Текст містить непідтримувані символи."
+            message.contains("checksum mismatch") && message.contains("text") -> "Перевірка цілісності тексту не пройшла. Текст відкинуто."
             message.contains("checksum mismatch") -> "Перевірка цілісності не пройшла. Mac відкинув файл."
             message.contains("invalid filename or file too large") -> "Mac відхилив ім’я або розмір файлу. Максимум — 2 GiB."
             else -> message
@@ -672,7 +912,8 @@ class MainActivity : Activity() {
     private fun showTab(index: Int) {
         activeTab = index
         showingReceive = index == 1
-        for ((tab, selected) in listOf(connectTab to (index == 0), receiveTab to (index == 1), sendTab to (index == 2))) {
+        for ((tab, selected) in listOf(connectTab to (index == 0), receiveTab to (index == 1),
+            sendTab to (index == 2), textTab to (index == 3))) {
             tab.background = panelBackground(if (selected) Color.rgb(46,53,69) else CARD)
             tab.setTextColor(if (selected) TEXT else MUTED)
             tab.isSelected = selected
@@ -680,6 +921,7 @@ class MainActivity : Activity() {
         connectionColumn.visibility = if (index == 0) View.VISIBLE else View.GONE
         receiveColumn.visibility = if (index == 1) View.VISIBLE else View.GONE
         sendColumn.visibility = if (index == 2) View.VISIBLE else View.GONE
+        textColumn.visibility = if (index == 3) View.VISIBLE else View.GONE
         if (index == 0) offerNearbyDevice()
     }
     private fun buildReceiveScreen() {
@@ -858,7 +1100,9 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("show_receive", false)) showMode(true)
+        if (acceptShare(intent)) return
+        if (intent.getBooleanExtra("show_text", false)) showTab(3)
+        else if (intent.getBooleanExtra("show_receive", false)) showMode(true)
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("active_tab", activeTab)
@@ -952,6 +1196,7 @@ class MainActivity : Activity() {
         if (!::code.isInitialized || busy || pairing) return
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
         if (::sendTarget.isInitialized) sendTarget.text = device?.name ?: tr("Вибери пристрій у вкладці «Підключення»")
+        if (::textHint.isInitialized) textHint.text = device?.let { "Надіслати на ${it.name}" } ?: tr("Вибери пристрій у вкладці «Підключення»")
         val peer = deviceBook.list().firstOrNull { it.fingerprint == device?.pin }
         forgetButton.visibility=if(peer==null)View.GONE else View.VISIBLE
         if(peer==null || device==null){code.setText("");return}
@@ -1309,7 +1554,7 @@ class MainActivity : Activity() {
         receiverService = null
         if (bindRequested) { unbindService(serviceConnection); bindRequested = false }
         // Sending still requires the screen. Receiving lives in the explicit foreground service.
-        if (busy) cancelBatch()
+        if (busy || texting) cancelBatch()
         super.onStop()
     }
     override fun onDestroy() {
