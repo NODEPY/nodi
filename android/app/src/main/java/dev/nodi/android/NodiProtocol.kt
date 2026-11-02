@@ -79,6 +79,9 @@ enum class TransferPhase { PREPARING, CONNECTING, SENDING, CONFIRMING }
 data class TransferProgress(val phase: TransferPhase, val bytes: Long = 0, val total: Long = -1)
 class ReceiverRejected(message: String) : IOException(message)
 
+/** A clipboard payload travels as one frame; the Go and Kotlin sides share this limit. */
+const val MAX_TEXT_BYTES = 64 * 1024
+
 /** One instance per upload. cancel() may safely be called from the UI thread. */
 class NodiTransfer {
     companion object { const val MAX_BYTES = 2L * 1024 * 1024 * 1024 }
@@ -158,29 +161,8 @@ class NodiTransfer {
             checkActive()
             val checksum = hash.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
             progress(TransferPhase.CONNECTING, force = true)
-            val trust = object : X509TrustManager {
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-                    throw CertificateException("Client certificates are not accepted")
-                }
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-                    val cert = chain?.firstOrNull() ?: throw CertificateException("Missing receiver certificate")
-                    val actual = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-                    if (!MessageDigest.isEqual(actual, invite.fingerprint)) {
-                        throw CertificateException("Receiver certificate fingerprint mismatch")
-                    }
-                }
-            }
-            val context = SSLContext.getInstance("TLS")
-            context.init(null, arrayOf<TrustManager>(trust), SecureRandom())
-            val socket = track(context.socketFactory.createSocket() as SSLSocket)
+            val socket = connect(invite)
             socket.use {
-                require("TLSv1.3" in socket.supportedProtocols) { "Для цієї версії Nodi потрібен Android 10 або новіший." }
-                socket.enabledProtocols = arrayOf("TLSv1.3")
-                socket.soTimeout = 30_000
-                socket.connect(InetSocketAddress(invite.host, invite.port), 10_000)
-                socket.startHandshake() // The pinned TrustManager runs BEFORE any token or file is sent.
-                checkActive()
                 val output = socket.outputStream
                 val input = BufferedInputStream(socket.inputStream)
                 val header = JSONObject().put("token", invite.token).put("name", originalName)
@@ -221,6 +203,70 @@ class NodiTransfer {
             snapshot?.delete()
         }
     }
+    /** Pinned TLS 1.3 channel. The certificate is verified before any secret is sent. */
+    private fun connect(invite: NodiInvite): SSLSocket {
+        val trust = object : X509TrustManager {
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                throw CertificateException("Client certificates are not accepted")
+            }
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                val cert = chain?.firstOrNull() ?: throw CertificateException("Missing receiver certificate")
+                val actual = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+                if (!MessageDigest.isEqual(actual, invite.fingerprint)) {
+                    throw CertificateException("Receiver certificate fingerprint mismatch")
+                }
+            }
+        }
+        val context = SSLContext.getInstance("TLS")
+        context.init(null, arrayOf<TrustManager>(trust), SecureRandom())
+        val socket = track(context.socketFactory.createSocket() as SSLSocket)
+        try {
+            require("TLSv1.3" in socket.supportedProtocols) { "Для цієї версії Nodi потрібен Android 10 або новіший." }
+            socket.enabledProtocols = arrayOf("TLSv1.3")
+            socket.soTimeout = 30_000
+            socket.connect(InetSocketAddress(invite.host, invite.port), 10_000)
+            socket.startHandshake()
+            checkActive()
+            return socket
+        } catch (error: Exception) {
+            try { socket.close() } catch (_: Exception) {}
+            throw error
+        }
+    }
+
+    /** One clipboard frame. No temp file: the payload is small and never touches storage. */
+    fun sendText(invite: NodiInvite, text: String, onProgress: (TransferProgress) -> Unit = {}) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        require(bytes.isNotEmpty() && bytes.size <= MAX_TEXT_BYTES) { "Текст має містити від 1 байта до 64 КБ." }
+        require(text.none { it == '\u0000' || (Character.isISOControl(it) && it != '\n' && it != '\r' && it != '\t') }) {
+            "Текст містить непідтримувані символи."
+        }
+        checkActive()
+        onProgress(TransferProgress(TransferPhase.CONNECTING))
+        val socket = connect(invite)
+        socket.use {
+            val output = socket.outputStream
+            val input = BufferedInputStream(socket.inputStream)
+            val checksum = MessageDigest.getInstance("SHA-256").digest(bytes)
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            val header = JSONObject().put("token", invite.token).put("action", "text")
+                .put("size", bytes.size).put("sha256", checksum)
+                .toString().plus("\n").toByteArray(Charsets.UTF_8)
+            require(header.size <= 4096) { "Заголовок тексту завеликий." }
+            output.write(header)
+            output.flush()
+            readReply(input)
+            onProgress(TransferProgress(TransferPhase.SENDING, 0, bytes.size.toLong()))
+            output.write(bytes)
+            output.flush()
+            checkActive()
+            onProgress(TransferProgress(TransferPhase.CONFIRMING, bytes.size.toLong(), bytes.size.toLong()))
+            socket.soTimeout = 120_000
+            readReply(input)
+        }
+    }
+
     private fun readReply(input: InputStream) {
         val line = ByteArrayOutputStream()
         while (line.size() < 4096) {

@@ -32,6 +32,12 @@ def send(core, code, file):
                             input=code, capture_output=True, text=True, timeout=15)
     return result, [json.loads(line) for line in result.stdout.splitlines()]
 
+def send_text(core, code, text):
+    payload = json.dumps({'code': code, 'text': text})
+    result = subprocess.run([str(core), 'send-text', '-json', '-stdin'],
+                            input=payload, capture_output=True, text=True, timeout=15)
+    return result, [json.loads(line) for line in result.stdout.splitlines()]
+
 def stop(proc):
     proc.terminate()
     try:
@@ -54,7 +60,8 @@ with tempfile.TemporaryDirectory(prefix='nodi-check-') as directory:
     try:
         sent, events = send(core,code,source)
         assert sent.returncode == 0, sent.stderr
-        assert [e['type'] for e in events] == ['sending','sent']
+        assert events[0]['type'] == 'sending' and events[-1]['type'] == 'sent', events
+        assert not [e for e in events if e['type'] in ('error','fatal')], events
         assert event(receiver)['type'] == 'received'
         assert (inbox/source.name).read_bytes() == source.read_bytes()
         print('PASS: JSON/stdin round trip, 1 MiB, Unicode filename')
@@ -65,6 +72,14 @@ with tempfile.TemporaryDirectory(prefix='nodi-check-') as directory:
         sent, events = send(core,'nodi1-invalid',source)
         assert sent.returncode != 0 and events[-1]['type'] == 'fatal'
         print('PASS: invalid code produces a structured error')
+        message = 'Привіт з Mac 🥒\nhttps://example.com/nodi'
+        sent, events = send_text(core, code, message)
+        assert sent.returncode == 0, sent.stderr
+        assert [e['type'] for e in events] == ['sending_text','text_sent'], events
+        received = event(receiver)
+        assert received['type'] == 'text_received' and received['text'] == message, received
+        assert [p.name for p in inbox.iterdir()] == [source.name], list(inbox.iterdir())
+        print('PASS: text round trip stays out of the inbox')
         # Interrupt an upload: Stop must clean its temporary file.
         data = code.removeprefix('nodi1-')
         invite = json.loads(base64.urlsafe_b64decode(data + '=' * (-len(data) % 4)))

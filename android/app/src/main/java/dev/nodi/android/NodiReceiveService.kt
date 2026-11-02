@@ -28,7 +28,8 @@ class PhoneInvite(val address: String, val code: String) {
 data class ReceiverState(val active: Boolean = false, val stopping: Boolean = false,
     val status: String = "Приймання вимкнене", val detail: String = "",
     val invites: List<PhoneInvite> = emptyList(), val bytes: Long = 0, val total: Long = 0,
-    val acceptingFiles: Boolean = false, val transferring: Boolean = false, val pairing: PairRequest? = null)
+    val acceptingFiles: Boolean = false, val transferring: Boolean = false, val pairing: PairRequest? = null,
+    val lastText: String = "", val lastTextAt: Long = 0L)
 
 /** Explicitly started, visible foreground receiver. No boot start, no silent restart. */
 class NodiReceiveService : Service() {
@@ -103,9 +104,9 @@ class NodiReceiveService : Service() {
     fun removeObserver(listener: (ReceiverState) -> Unit) { observers.remove(listener) }
     private fun publish(value: ReceiverState) { state = value; observers.toList().forEach { it(value) } }
 
-    private fun notification(text: String): Notification {
+    private fun notification(text: String, textTab: Boolean = false): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java)
-            .putExtra("show_receive", true).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            .putExtra("show_receive", !textTab).putExtra("show_text", textTab).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, NodiReceiveService::class.java).setAction(STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -159,6 +160,10 @@ class NodiReceiveService : Service() {
                     main.post { if (session === current && !current.cancelled.get()) handleEvent(event) }
                 }, devices = NodiDeviceStore.get(this), onConnectionRequest = { host, pin, port ->
                     main.post { if (session === current && !current.cancelled.get()) onConnectionRequest?.invoke(host, pin, port) }
+                }, onText = { text ->
+                    if (current.cancelled.get()) throw ReceiveFailure("receiving stopped")
+                    NodiTextHistory.add(text, incoming = true)
+                    main.post { if (session === current && !current.cancelled.get()) handleText(text) }
                 })
                 current.receiver = receiver
                 if (current.cancelled.get()) { receiver.close(); return@execute }
@@ -258,6 +263,14 @@ class NodiReceiveService : Service() {
             if (event.diagnostic.isNotEmpty()) "\nКод помилки: ${event.diagnostic}" else ""
             else event.name
         publish(state.copy(status = status, detail = detail, bytes = event.bytes, total = event.total, transferring = transferring))
+    }
+    private fun handleText(text: String) {
+        // History is already recorded before the network acknowledgement.
+        // Copy/open are explicit user actions in the Text tab.
+        publish(state.copy(status = "Отримано текст", detail = "Скопіюй текст на вкладці «Текст».",
+            lastText = text, lastTextAt = System.currentTimeMillis()))
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION, notification("Отримано текст. Відкрий Nodi, щоб скопіювати.", textTab = true))
     }
     private fun releaseWake() {
         wake?.let { if (it.isHeld) it.release() }

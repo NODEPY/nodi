@@ -20,10 +20,43 @@ struct CoreEvent: Decodable {
     var compare: String? = nil
     var pin: String? = nil
     var code: String? = nil
+    var text: String? = nil
     var devices: [SavedDevice]? = nil
 }
 
-final class FlippedDocumentView: NSView { override var isFlipped: Bool { true } }
+final class FlippedDocumentView: NSView {
+    override var isFlipped: Bool { true }
+    var canAcceptFiles: (() -> Bool)?
+    var onFilesDropped: (([URL]) -> Void)?
+
+    private func files(_ sender: NSDraggingInfo) -> [URL]? {
+        guard canAcceptFiles?() == true,
+              let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              !urls.isEmpty, urls.count <= 100,
+              urls.allSatisfy({ (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }) else { return nil }
+        return Array(NSOrderedSet(array: urls)) as? [URL]
+    }
+    private func highlight(_ enabled: Bool) {
+        layer?.borderColor = NSColor.controlAccentColor.cgColor
+        layer?.borderWidth = enabled ? 3 : 0
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let accepted = files(sender) != nil
+        highlight(accepted)
+        return accepted ? .copy : []
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { highlight(false) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { files(sender) != nil }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        highlight(false)
+        guard let urls = files(sender) else { return false }
+        onFilesDropped?(urls)
+        return true
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { highlight(false) }
+}
 
 final class CardView: NSView {
     override var wantsUpdateLayer: Bool { true }
@@ -74,7 +107,7 @@ final class InviteQRView: NSView {
 final class CoreTask {
     private let process = Process()
     private var inputHandle: FileHandle?
-    func start(arguments: [String], secret: String? = nil, keepInput: Bool = false,
+    func start(arguments: [String], stdin: String? = nil, keepInput: Bool = false,
                onEvent: @escaping (CoreEvent) -> Void,
                onExit: @escaping (Int32) -> Void) throws {
         guard let binaryDirectory = Bundle.main.executableURL?.deletingLastPathComponent() else {
@@ -92,7 +125,7 @@ final class CoreTask {
         let input = Pipe()
         process.standardInput = input
         try process.run()
-        if let secret = secret { input.fileHandleForWriting.write(Data(secret.utf8)) }
+        if let stdin = stdin { input.fileHandleForWriting.write(Data(stdin.utf8)) }
         if keepInput { inputHandle = input.fileHandleForWriting } else { input.fileHandleForWriting.closeFile() }
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             var pending = Data()
@@ -264,6 +297,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let sendButton = NodiButton(title: "Надіслати файл", target: nil, action: nil)
     private let cancelButton = NodiButton(title: "Скасувати", target: nil, action: nil)
     private let sendStatus = NodiLabel(wrappingLabelWithString: "Вибери файл")
+    private struct TextEntry { let text: String; let incoming: Bool; let at: Date }
+    private var textHistory: [TextEntry] = []
+    private var sendingText = false
+    private let textInput = NSTextView()
+    private let textScroll = NSScrollView()
+    private let pasteTextButton = NodiButton(title: "Вставити з буфера", target: nil, action: nil)
+    private let sendTextButton = NodiButton(title: "Надіслати текст", target: nil, action: nil)
+    private let textStatus = NodiLabel(wrappingLabelWithString: "Встав текст або посилання")
+    private let textHistoryStack = NSStackView()
     private let activity = NSTextView()
     private let spinner = NSProgressIndicator()
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -316,8 +358,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.window.title = "Nodi"; self.window.contentMinSize = NSSize(width: 760, height: 600); self.window.isReleasedWhenClosed = false; self.window.center()
         let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; self.window.contentView = scroll
         let root = FlippedDocumentView(); root.wantsLayer=true; root.layer?.backgroundColor=self.window.backgroundColor.cgColor; scroll.documentView = root; root.translatesAutoresizingMaskIntoConstraints = false
+        root.registerForDraggedTypes([.fileURL])
+        root.canAcceptFiles = { [weak self] in self?.sender == nil && self?.chooseButton.isEnabled == true }
+        root.onFilesDropped = { [weak self] urls in self?.selectFiles(urls) }
         NSLayoutConstraint.activate([root.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor), root.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor), root.topAnchor.constraint(equalTo: scroll.contentView.topAnchor)])
         self.wire(self.receiveButton, #selector(toggleReceive)); self.wire(self.folderButton, #selector(chooseFolder)); self.wire(self.addButton, #selector(showQR)); self.wire(self.forgetButton, #selector(forgetDevice)); self.wire(self.chooseButton, #selector(chooseFile)); self.wire(self.sendButton, #selector(sendFile)); self.wire(self.cancelButton, #selector(cancelSend))
+        self.wire(self.pasteTextButton, #selector(pasteText)); self.wire(self.sendTextButton, #selector(sendText))
         self.devicePicker.target = self; self.devicePicker.action = #selector(deviceChanged)
         self.addressPicker.target = self; self.addressPicker.action = #selector(addressChanged)
         let refresh = NodiButton(title: "Знайти у Wi-Fi", target: self, action: #selector(refreshDevices)); refresh.bezelStyle = .rounded
@@ -345,9 +391,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.receiveStatus.maximumNumberOfLines=2
         self.receiveStatus.font = .systemFont(ofSize:12); self.receiveStatus.textColor = .secondaryLabelColor
         self.folderLabel.font = .systemFont(ofSize:12); self.folderLabel.textColor = .secondaryLabelColor
-        let send = self.card([self.label("Надіслати", size: 15, bold: true), self.fileLabel, self.chooseButton, self.row([self.sendButton, self.cancelButton, self.spinner]), self.sendStatus])
+        let send = self.card([self.label("Надіслати", size: 15, bold: true), self.fileLabel, self.label("Або перетягни файли сюди", size: 12), self.chooseButton, self.row([self.sendButton, self.cancelButton, self.spinner]), self.sendStatus])
+        let text = self.card([self.label("Текст і посилання", size: 15, bold: true), self.textScroll, self.row([self.pasteTextButton, self.sendTextButton, NSView()]), self.textStatus, self.textHistoryStack])
         let logScroll = NSScrollView(); logScroll.hasVerticalScroller = true; logScroll.borderType = .bezelBorder; logScroll.heightAnchor.constraint(equalToConstant: 90).isActive = true; logScroll.isHidden = true; self.logPanel = logScroll
         self.activity.isEditable = false; self.activity.isVerticallyResizable = true; self.activity.autoresizingMask = [.width]; self.activity.textContainer?.widthTracksTextView = true; self.activity.textContainerInset = NSSize(width: 8, height: 8); logScroll.documentView = self.activity
+        self.textScroll.hasVerticalScroller = true; self.textScroll.borderType = .bezelBorder
+        self.textScroll.heightAnchor.constraint(equalToConstant: 96).isActive = true
+        self.textInput.isRichText = false; self.textInput.isAutomaticQuoteSubstitutionEnabled = false; self.textInput.isAutomaticDashSubstitutionEnabled = false
+        self.textInput.font = .systemFont(ofSize: 13); self.textInput.isVerticallyResizable = true
+        self.textInput.autoresizingMask = [.width]; self.textInput.textContainer?.widthTracksTextView = true
+        self.textInput.textContainerInset = NSSize(width: 8, height: 8)
+        self.textScroll.documentView = self.textInput
+        self.textStatus.font = .systemFont(ofSize: 12); self.textStatus.textColor = .secondaryLabelColor
+        self.textHistoryStack.orientation = .vertical; self.textHistoryStack.alignment = .leading; self.textHistoryStack.spacing = 8
         let details = NodiButton(title: "Події", target: self, action: #selector(toggleLogs)); details.bezelStyle = .rounded
         self.lastEvent.font = .systemFont(ofSize: 11); self.lastEvent.textColor = .secondaryLabelColor; self.lastEvent.lineBreakMode = .byTruncatingTail
         let settingsButton=NodiButton(title:"Параметри",target:self,action:#selector(settings));settingsButton.bezelStyle = .rounded
@@ -356,11 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let header=self.row([mark,title,NSView(),settingsButton])
         let transfers=NSStackView(views:[send,receive]);transfers.orientation = .horizontal;transfers.alignment = .top;transfers.distribution = .fillEqually;transfers.spacing=16
         send.heightAnchor.constraint(equalTo:receive.heightAnchor).isActive=true
-        let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, self.row([details, self.lastEvent]), logScroll])
+        let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 20), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)])
-        for v in [header, connection, transfers, logScroll] { v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
-        self.renderDevices(); self.setBusy(false); self.window.makeKeyAndOrderFront(nil)
+        for v in [header, connection, transfers, text, logScroll] { v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        self.renderDevices(); self.setBusy(false); self.renderTextHistory(); self.window.makeKeyAndOrderFront(nil)
     }
     private var previewWindow: NSPanel?
     private var previewURL: URL?
@@ -370,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if self.sender != nil { return }
         let setup=NodiSetup(first:first)
         setup.present(parent:self.window)
-        if let root=self.window?.contentView { self.translateUI(root);self.makeMenu();self.renderDevices() }
+        if let root=self.window?.contentView { self.translateUI(root);self.makeMenu();self.renderDevices();self.renderTextHistory() }
     }
     private func translateUI(_ view:NSView) {
         if let field=view as? NSTextField { field.stringValue=NodiL(field.stringValue) }
@@ -620,6 +676,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "received":
             if let path=event.path { self.showReceived(URL(fileURLWithPath:path)) }
             self.log("Збережено: \(URL(fileURLWithPath: event.path ?? "файл").lastPathComponent)")
+        case "text_received":
+            if let text = event.text, !text.isEmpty { self.acceptText(text) }
         case "error", "fatal": self.log(event.message ?? "Помилка Nodi")
         default: break
         }
@@ -683,15 +741,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let picker=NSOpenPanel();picker.canChooseFiles=true;picker.canChooseDirectories=false;picker.allowsMultipleSelection=true
         picker.beginSheetModal(for:self.window){[weak self] response in
             guard response == .OK,let self=self else{return}
-            self.selectedFiles=picker.urls
-            self.fileLabel.stringValue=picker.urls.count==1 ? (picker.urls.first?.lastPathComponent ?? "") : NodiL("Файлів: ")+String(picker.urls.count)
-            self.fileLabel.toolTip=picker.urls.map{$0.lastPathComponent}.joined(separator:"\n")
-            self.setBusy(false)
+            self.selectFiles(picker.urls)
         }
+    }
+    private func selectFiles(_ urls: [URL]) {
+        guard self.sender == nil, !urls.isEmpty else { return }
+        self.selectedFiles = urls
+        self.fileLabel.stringValue = urls.count == 1 ? urls[0].lastPathComponent : NodiL("Файлів: ") + String(urls.count)
+        self.fileLabel.toolTip = urls.map { $0.lastPathComponent }.joined(separator: "\n")
+        self.sendStatus.stringValue = NodiL("Готово до передачі")
+        self.setBusy(false)
     }
     private func setBusy(_ busy: Bool) {
         self.pulse(self.sendButton,enabled:busy)
+        self.pulse(self.sendTextButton,enabled:busy && self.sendingText)
         self.chooseButton.isEnabled = !busy; self.sendButton.isEnabled = !busy && self.selectedDevice() != nil; self.cancelButton.isEnabled = busy || !self.selectedFiles.isEmpty
+        self.pasteTextButton.isEnabled = !busy; self.sendTextButton.isEnabled = !busy && self.selectedDevice() != nil; self.textInput.isEditable = !busy
         self.devicePicker.isEnabled = !busy && (!self.saved.isEmpty || !self.discovered.isEmpty)
         self.forgetButton.isEnabled = self.selectedDevice() != nil && self.receiver != nil && !self.stopping
         self.addButton.isEnabled = !self.stopping
@@ -704,7 +769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let address=self.discovered.first(where:{$0.pin==peer.fingerprint})?.address ?? peer.address
         guard let code=peer.code(address:address) else{return}
         self.pendingFiles=self.selectedFiles;self.batchTotal=self.pendingFiles.count;self.batchSent=0
-        self.sendCancelled=false;self.activeSendPin=peer.fingerprint
+        self.sendCancelled=false;self.sendingText=false;self.activeSendPin=peer.fingerprint
         self.sendNext(code:code)
     }
     private func finishBatch() {
@@ -718,7 +783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.stringValue="\(self.batchSent+1)/\(self.batchTotal) · \(file.lastPathComponent)"
         var failure:String?=nil
         do {
-            try task.start(arguments:["send","-json","-code-stdin","-file",file.path],secret:code,onEvent:{[weak self] event in
+            try task.start(arguments:["send","-json","-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
                 guard let self=self else{return}
                 if event.type=="sent"{self.sendConfirmed=true}
                 else if event.type=="error" || event.type=="fatal"{failure=event.message ?? NodiL("Помилка передачі")}
@@ -737,12 +802,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func cancelSend(){
         self.sendCancelled=true
+        if self.sendingText {
+            if let sender=self.sender { sender.stop() } else { self.setBusy(false) }
+            return
+        }
         self.pendingFiles.removeAll()
         self.selectedFiles.removeAll()
         self.fileLabel.stringValue=NodiL("Вибери файл")
         self.fileLabel.toolTip=nil
         if let sender=self.sender { sender.stop() }
         else { self.sendStatus.stringValue=NodiL("Вибір файлів очищено"); self.setBusy(false) }
+    }
+    @objc private func pasteText() {
+        guard let value = NSPasteboard.general.string(forType: .string), !value.isEmpty else {
+            self.textStatus.stringValue = NodiL("Буфер обміну порожній.")
+            return
+        }
+        guard let data = value.data(using: .utf8), data.count <= 64 * 1024 else {
+            self.textStatus.stringValue = NodiL("Текст у буфері завеликий. Максимум — 64 КБ.")
+            return
+        }
+        self.textInput.string = value
+        self.textStatus.stringValue = NodiL("Готово до надсилання")
+    }
+    @objc private func sendText() {
+        guard self.sender == nil else { return }
+        guard let peer = self.selectedDevice() else {
+            self.textStatus.stringValue = NodiL("Вибери пристрій у списку")
+            return
+        }
+        let value = self.textInput.string
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            self.textStatus.stringValue = NodiL("Встав текст або посилання")
+            return
+        }
+        guard let encoded = value.data(using: .utf8), encoded.count <= 64 * 1024 else {
+            self.textStatus.stringValue = NodiL("Текст завеликий. Максимум — 64 КБ.")
+            return
+        }
+        let address = self.discovered.first(where: { $0.pin == peer.fingerprint })?.address ?? peer.address
+        guard let code = peer.code(address: address),
+              let payload = try? JSONSerialization.data(withJSONObject: ["code": code, "text": value]),
+              let stdin = String(data: payload, encoding: .utf8) else { return }
+        // stdin keeps the text out of argv, where every local process can read it.
+        let task = CoreTask(); self.sender = task; self.sendingText = true
+        self.sendCancelled = false; self.activeSendPin = peer.fingerprint
+        self.setBusy(true)
+        self.textStatus.stringValue = NodiL("Надсилаю текст…")
+        do {
+            try task.start(arguments: ["send-text", "-json", "-stdin"], stdin: stdin, onEvent: { [weak self] event in
+                guard let self = self else { return }
+                if event.type == "error" || event.type == "fatal" {
+                    self.textStatus.stringValue = event.message ?? NodiL("Не вдалося надіслати")
+                }
+            }, onExit: { [weak self] status in
+                guard let self = self else { return }
+                self.sender = nil; self.sendingText = false; self.activeSendPin = nil
+                self.setBusy(false)
+                if status == 0 {
+                    self.addTextEntry(value, incoming: false)
+                    self.textInput.string = ""
+                    self.textStatus.stringValue = NodiL("Текст надіслано")
+                } else if self.sendCancelled {
+                    self.textStatus.stringValue = NodiL("Передачу зупинено")
+                } else if self.textStatus.stringValue == NodiL("Надсилаю текст…") {
+                    self.textStatus.stringValue = NodiL("Не вдалося надіслати")
+                }
+            })
+        } catch {
+            self.sender = nil; self.sendingText = false; self.activeSendPin = nil
+            self.setBusy(false)
+            self.textStatus.stringValue = error.localizedDescription
+        }
+    }
+    private func acceptText(_ text: String) {
+        self.addTextEntry(text, incoming: true)
+        self.textStatus.stringValue = NodiL("Отримано текст")
+        self.log(NodiL("Отримано текст"))
+    }
+    private func addTextEntry(_ text: String, incoming: Bool) {
+        self.textHistory.insert(TextEntry(text: text, incoming: incoming, at: Date()), at: 0)
+        if self.textHistory.count > 10 { self.textHistory.removeLast(self.textHistory.count - 10) }
+        self.renderTextHistory()
+    }
+    private func renderTextHistory() {
+        for view in self.textHistoryStack.arrangedSubviews { view.removeFromSuperview() }
+        guard !self.textHistory.isEmpty else {
+            let empty = self.label(NodiL("Історія порожня. Надішли перший текст."), size: 12)
+            empty.textColor = .secondaryLabelColor
+            self.textHistoryStack.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: self.textHistoryStack.widthAnchor).isActive = true
+            return
+        }
+        for (index, entry) in self.textHistory.enumerated() {
+            let preview = self.label((entry.incoming ? "↓ " : "↑ ") + entry.text.replacingOccurrences(of: "\n", with: " "), size: 12)
+            preview.maximumNumberOfLines = 2; preview.lineBreakMode = .byTruncatingTail
+            let copy = NodiButton(title: NodiL("Копіювати"), target: self, action: #selector(copyHistory(_:)))
+            copy.bezelStyle = .rounded; copy.tag = index
+            var actions = [copy]
+            if self.linkURL(entry.text) != nil {
+                let open = NodiButton(title: NodiL("Відкрити"), target: self, action: #selector(openHistory(_:)))
+                open.bezelStyle = .rounded; open.tag = index
+                actions.append(open)
+            }
+            let buttons = NSStackView(views: actions); buttons.orientation = .horizontal; buttons.spacing = 8
+            buttons.setContentHuggingPriority(.required, for: .horizontal)
+            let line = NSStackView(views: [preview, NSView(), buttons]); line.orientation = .horizontal; line.alignment = .centerY; line.spacing = 8
+            self.textHistoryStack.addArrangedSubview(line)
+            line.widthAnchor.constraint(equalTo: self.textHistoryStack.widthAnchor).isActive = true
+        }
+    }
+    private func linkURL(_ value: String) -> URL? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isWhitespace }) else { return nil }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", url.host != nil else { return nil }
+        return url
+    }
+    @objc private func copyHistory(_ sender: NSButton) {
+        guard self.textHistory.indices.contains(sender.tag) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(self.textHistory[sender.tag].text, forType: .string)
+        self.textStatus.stringValue = NodiL("Скопійовано")
+    }
+    @objc private func openHistory(_ sender: NSButton) {
+        guard self.textHistory.indices.contains(sender.tag), let url = self.linkURL(self.textHistory[sender.tag].text) else { return }
+        NSWorkspace.shared.open(url)
     }
 
 }
@@ -854,6 +1039,22 @@ func NodiL(_ original: String) -> String {
  return source
 }
 private let nodiWords: [String:[String]] = [
+"Або перетягни файли сюди": ["Or drop files here", "Или перетащи файлы сюда"],
+"Текст і посилання":["Text and links", "Текст и ссылки"],
+"Вставити з буфера":["Paste from clipboard", "Вставить из буфера"],
+"Надіслати текст":["Send text", "Отправить текст"],
+"Встав текст або посилання":["Paste text or a link", "Вставь текст или ссылку"],
+"Готово до надсилання":["Ready to send", "Готово к отправке"],
+"Надсилаю текст…":["Sending text…", "Отправка текста…"],
+"Текст надіслано":["Text sent", "Текст отправлен"],
+"Отримано текст":["Text received", "Получен текст"],
+"Отримано текст · скопійовано в буфер":["Text received · copied to clipboard", "Получен текст · скопирован в буфер"],
+"Скопійовано":["Copied", "Скопировано"],
+"Буфер обміну порожній.":["The clipboard is empty.", "Буфер обмена пуст."],
+"Текст у буфері завеликий. Максимум — 64 КБ.":["Clipboard text is too large. Maximum: 64 KiB.", "Текст в буфере слишком большой. Максимум — 64 КБ."],
+"Текст завеликий. Максимум — 64 КБ.":["Text is too large. Maximum: 64 KiB.", "Текст слишком большой. Максимум — 64 КБ."],
+"Історія порожня. Надішли перший текст.":["No history yet. Send your first text.", "История пуста. Отправь первый текст."],
+"Вибери пристрій у списку":["Choose a device from the list", "Выбери устройство из списка"],
 "Готово до підключення":["Ready to connect", "Готово к подключению"],
 "Папка потрібна лише для отримання файлів.":["Choose a folder only when receiving files.", "Папка нужна только для получения файлов."],
 "Підключення залишається доступним.":["Connections remain available.", "Подключение остаётся доступным."],
