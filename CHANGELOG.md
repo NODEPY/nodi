@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-alpha.4 — 2026-11-02
+
+- Android: accept one or multiple files through Share → Nodi; shared text and links open the Text tab. Sending still requires an explicit tap.
+- macOS: drop up to 100 regular files into the window, with drop feedback and protection against replacing an active transfer.
+- Add standalone Kotlin ↔ Go TLS integration tests and CI reports.
+- macOS builds use a fresh module cache and support SDKROOT for compiler/SDK compatibility.
+
 ## Unreleased — sharing shortcuts
 
 - Android: accept one or multiple files through Share → Nodi; shared text and links open the Text tab. Sending still requires an explicit tap.
