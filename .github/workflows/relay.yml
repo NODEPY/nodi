@@ -1,0 +1,30 @@
+name: Cloudflare relay checks
+on:
+  push:
+    paths: ['server/cloudflare/**', '.github/workflows/relay.yml']
+  pull_request:
+    paths: ['server/cloudflare/**', '.github/workflows/relay.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server/cloudflare
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/cloudflare/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run check

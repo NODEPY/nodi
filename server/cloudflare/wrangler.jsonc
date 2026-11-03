@@ -1,0 +1,9 @@
+{
+  "name": "nodi-relay",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-06",
+  "workers_dev": true,
+  "observability": { "enabled": false },
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "RelayHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayHub"] }]
+}
