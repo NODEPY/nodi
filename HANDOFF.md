@@ -1,3 +1,96 @@
+# Current checkpoint — Internet relay (private alpha server)
+
+Updated: 2026-11-03. Branch `codex/internet-relay`, based on PR #2 HEAD
+`26c67eb`. PR #2 is still unmerged and `main` was not modified. No deployment,
+app integration, PR, merge, tag or release was made.
+
+## Implemented
+
+- `internal/relay` + `cmd/nodi-relay`: loopback-only Go rendezvous prototype
+  with its own open TCP protocol; unchanged in this checkpoint except review.
+- `server/cloudflare`: Worker + SQLite-backed Durable Object relay with HTTPS/WSS
+  enforcement, operator-provisioned device credentials, mutual peer grants,
+  private polling presence, single-use role-bound tickets, revocation, bounded
+  duplex framing, flow control, quotas and DO-alarm expiry.
+- Five-second JSON body deadline and safe outbound WebSocket sends that close the
+  session instead of throwing when the peer socket has just gone away.
+- Tests use Miniflare/workerd, plus a TLS 1.3 pinned-certificate transport test.
+- `.github/workflows/relay.yml`: Node 22, npm cache on
+  `server/cloudflare/package-lock.json`, `npm ci`, `npm test`, `npm run check`.
+
+## Verified locally (actual command results)
+
+- `npm ci` in `server/cloudflare`: added 42 packages, 0 vulnerabilities.
+- `npm test`: 15 tests, 15 pass. Three consecutive final runs after all edits:
+  15 pass / 0 fail each, about 36.9–37.0 s per run. The unclaimed-ticket test
+  intentionally takes about 31 s.
+- `npm run check`: `wrangler 4.157.0 deploy --dry-run` passed; 10.73 KiB upload
+  (3.40 KiB gzip); no deploy.
+- Node v22.23.4 / npm 10.9.9. `compatibility_date` 2026-08-06 is accepted by
+  Miniflare 4.20260730.0 and Wrangler 4.157.0.
+- `node --check src/worker.js` and `node --check test/relay.test.js`: pass.
+- `go vet ./...`: pass. `go test -race -count=1 ./...`: pass
+  (`internal/relay` 1.730 s, `internal/transfer` 3.797 s).
+- `git diff --check`: pass. CI workflow YAML parses; it was inspected but not
+  run as GitHub Actions.
+- README numbers checked against `src/worker.js`: 64 devices, 16 sessions,
+  2 sessions/device, 120 requests/device/minute, 45 s presence, 30 s
+  rendezvous, 10 min paired lifetime, 64 KiB frame, 64 MiB tunnel bytes,
+  4096 frames/session, 1024-byte JSON body, 5 s body deadline. Device/global
+  session/frame/byte ceilings are code-confirmed; most are not exercised at
+  their exact boundary by tests.
+
+## Fixes in this checkpoint
+
+- The reported failure of “inner TLS rejects an incorrect certificate pin”
+  did not reproduce in 10 targeted runs. The test bridge could still call
+  WebSocket `send()`/`close()` after teardown. It now guards `readyState`,
+  handles socket errors, and asserts the receiver got zero application bytes
+  after pin rejection. The test still requires a `pin mismatch` error.
+- Added tests for a stalled body (rejected after ~5 s) and a truncated body
+  (rejected immediately); neither registers the device. A hard client-side
+  abort cannot be observed as an HTTP response through Miniflare, so that
+  transport case is covered by truncation plus the timeout.
+- README corrected: exact `LOCAL_TEST` hosts (`localhost`/`127.0.0.1`), and the
+  5 s body deadline is now documented. The test-coverage sentence was updated.
+- Server-side authenticated presence and single-use ticket issuance now exist.
+  This supersedes the old “next: authenticated presence/ticket issuance” note
+  for the Cloudflare server; the Go prototype still lacks them.
+
+## Security review notes
+
+- Tickets are distinct per role/session, checked against the authenticated
+  device, consumed before the 101 response and persisted before it is visible.
+  Revocation, unpairing, cancellation and expiry delete sessions and close
+  sockets. No mutual-authorization bypass was found.
+- Admin token is never logged or returned. Tokens are compared as SHA-256
+  digests, not with a constant-time routine; a leaked digest prefix is not
+  enough to authenticate, but this remains an open review question.
+- HTTPS is required; `LOCAL_TEST` only permits `localhost`/`127.0.0.1`. It must
+  never be set on a deployed Worker.
+- Open availability questions: the 5 s body read runs inside
+  `blockConcurrencyWhile`, so an authenticated slow-body request can stall the
+  single Durable Object for up to 5 s. Admin requests have no per-token rate
+  limit and depend on edge controls. The 64 MiB check runs after adding a frame,
+  so teardown can occur up to one frame past the advertised cap.
+
+## Not verified
+
+- No Cloudflare deployment, account configuration, secret, real HTTPS/WSS or
+  domain; no paid hosting was purchased.
+- No real Android/macOS client integration or secure enrollment UI; no traffic
+  through this relay from physical devices on different networks or mobile data.
+- No Android/Go TLS interoperability test against this WebSocket relay; the TLS
+  test is a transport test. The Go prototype has a different protocol.
+- No load, soak, restart/deployment-interruption, free-plan quota or edge abuse
+  testing. No independent security audit. Presence is polling-based, not a
+  connectivity guarantee. Do not present this as production-ready.
+
+The prior handoff below is preserved as historical context; its early “not
+pushed” statements predate PR #2, which another agent published successfully.
+
+---
+
 # Nodi handoff — manual address / VPN
 
 Updated: 2026-11-03. Base main: 5293cf3 (Alpha 5).
