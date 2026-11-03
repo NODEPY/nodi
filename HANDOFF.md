@@ -31,8 +31,13 @@ app integration, PR, merge, tag or release was made.
 - `node --check src/worker.js` and `node --check test/relay.test.js`: pass.
 - `go vet ./...`: pass. `go test -race -count=1 ./...`: pass
   (`internal/relay` 1.730 s, `internal/transfer` 3.797 s).
-- `git diff --check`: pass. CI workflow YAML parses; it was inspected but not
-  run as GitHub Actions.
+- `git diff --check`: pass.
+- GitHub Actions on pushed head `2ad779c` (push at 2026-11-03T15:30:08Z):
+  Cloudflare relay checks success (run 41664531408; `npm ci`, `npm test` 15/15,
+  `npm run check` dry-run), Go checks success (run 41664530921; macOS/Ubuntu,
+  Go stable/1.22.x, vet, race tests, CLI integration), and Kotlin-Go interop
+  success (run 41664530955). CI results are now verified, not merely local YAML
+  inspection.
 - README numbers checked against `src/worker.js`: 64 devices, 16 sessions,
   2 sessions/device, 120 requests/device/minute, 45 s presence, 30 s
   rendezvous, 10 min paired lifetime, 64 KiB frame, 64 MiB tunnel bytes,
@@ -53,6 +58,11 @@ app integration, PR, merge, tag or release was made.
   transport case is covered by truncation plus the timeout.
 - README corrected: exact `LOCAL_TEST` hosts (`localhost`/`127.0.0.1`), and the
   5 s body deadline is now documented. The test-coverage sentence was updated.
+- Added `/.wrangler/` to the root `.gitignore`. A root `.wrangler/` directory
+  appeared once and was removed manually; running `npm test` and `npm run check`
+  from `server/cloudflare` did not recreate it in controlled checks, so its
+  origin remains unknown. The nested `server/cloudflare/.wrangler/` was already
+  ignored by that package's `.gitignore`.
 - Server-side authenticated presence and single-use ticket issuance now exist.
   This supersedes the old “next: authenticated presence/ticket issuance” note
   for the Cloudflare server; the Go prototype still lacks them.
