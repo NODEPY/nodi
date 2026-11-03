@@ -336,6 +336,7 @@ class MainActivity : Activity() {
         deviceActions.removeView(forgetButton);deviceHeader.addView(forgetButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(scanButton,8,dp(44))
+        deviceCard.addItem(button("Адреса / VPN") { editEndpoint() },8,dp(44))
         connectionColumn.addItem(deviceCard, 16)
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
         connectTab = button("Підключення") { showTab(0) }
@@ -1132,13 +1133,16 @@ class MainActivity : Activity() {
         val values = stored.mapNotNull { peer ->
             try {
                 val found = nearbyAll.firstOrNull { it.pin == peer.fingerprint }
-                val invite = NodiInvite.parse(peer.code())
-                NearbyDevice(found?.name ?: peer.name, found?.host ?: invite.host, found?.port ?: invite.port, peer.fingerprint)
+                val manual = manualEndpoint(peer.fingerprint)
+                val invite = NodiInvite.parse(peer.code(manual ?: peer.address))
+                NearbyDevice(found?.name ?: peer.name,
+                    if (manual != null) invite.host else found?.host ?: invite.host,
+                    if (manual != null) invite.port else found?.port ?: invite.port, peer.fingerprint)
             } catch (_: Exception) { null }
         }
         val ownPin=runCatching {NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex()}.getOrNull()
         val allValues=(values+nearbyAll.filter {found -> found.pin!=ownPin && stored.none {it.fingerprint==found.pin}}).distinctBy {it.pin}
-        val titles = allValues.map { "${it.name} · " + when {stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");else -> tr("не знайдено")} }
+        val titles = allValues.map { "${it.name} · " + when {manualEndpoint(it.pin) != null && stored.any { p -> p.fingerprint == it.pin } -> tr("Адреса вручну");stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");else -> tr("не знайдено")} }
         if (allValues != nearby || titles != nearbyTitles) {
             nearby = allValues; nearbyTitles = titles
             nearbyPicker.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, titles) {
@@ -1192,6 +1196,48 @@ class MainActivity : Activity() {
                 dialog.show()
             }
     }
+    private fun manualEndpoint(pin: String): String? = getSharedPreferences("nodi_endpoints", MODE_PRIVATE)
+        .getString(pin, null)?.let { runCatching { NodiEndpoint.normalize(it) }.getOrNull() }
+
+    private fun editEndpoint() {
+        if (busy || selecting || scanning || pairing) return
+        val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
+        val peer = deviceBook.list().firstOrNull { it.fingerprint == device?.pin }
+        val own = receiverState.invites.joinToString("\n") { it.address }
+        val instructions = tr("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") +
+            "\n\n" + tr("Адреси цього пристрою:") + "\n" + own.ifEmpty { tr("Увімкни приймання, щоб побачити адресу.") }
+        if (peer == null) {
+            android.app.AlertDialog.Builder(this).setTitle(tr("Адреса / VPN"))
+                .setMessage(instructions).setPositiveButton(tr("Готово"), null).show()
+            return
+        }
+        val input = EditText(this).apply {
+            isSingleLine = true
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            hint = "100.64.0.2:7331"
+            filters = arrayOf(InputFilter.LengthFilter(64))
+            setText(manualEndpoint(peer.fingerprint) ?: peer.address)
+        }
+        val dialog = android.app.AlertDialog.Builder(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
+            .setMessage(instructions).setView(input)
+            .setPositiveButton(tr("Зберегти"), null)
+            .setNeutralButton(tr("Автоматично")) { _, _ ->
+                getSharedPreferences("nodi_endpoints", MODE_PRIVATE).edit().remove(peer.fingerprint).apply()
+                renderNearby()
+            }.setNegativeButton(tr("Скасувати"), null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val endpoint = runCatching { NodiEndpoint.normalize(input.text.toString()) }.getOrNull()
+                if (endpoint == null) { input.error = tr("Введи IPv4:порт, наприклад 100.64.0.2:7331"); return@setOnClickListener }
+                if (busy || selecting || scanning || pairing || deviceBook.list().none { it.fingerprint == peer.fingerprint }) return@setOnClickListener
+                getSharedPreferences("nodi_endpoints", MODE_PRIVATE).edit().putString(peer.fingerprint, endpoint).apply()
+                renderNearby()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun fillSelectedDevice() {
         if (!::code.isInitialized || busy || pairing) return
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
@@ -1202,7 +1248,7 @@ class MainActivity : Activity() {
         if(peer==null || device==null){code.setText("");return}
         val host = device.host.hostAddress ?: return
         val address = if (host.contains(':')) "[$host]:${device.port}" else "$host:${device.port}"
-        code.setText(peer.code(address))
+        code.setText(peer.code(manualEndpoint(peer.fingerprint) ?: address))
     }
     private fun pairNearby(pin: String? = null, initiatedHere: Boolean = true) {
         if (busy || selecting || scanning || pairing) return

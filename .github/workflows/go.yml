@@ -34,3 +34,6 @@ jobs:
         run: go test -race -count=25 -timeout=120s ./internal/transfer -run '^TestForgetDuringCommit$'
       - name: CLI integration
         run: python3 scripts/check-core.py
+      - name: Swift endpoint validation
+        if: runner.os == 'macOS'
+        run: bash scripts/check-endpoint-macos.sh

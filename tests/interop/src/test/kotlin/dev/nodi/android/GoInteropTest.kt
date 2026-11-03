@@ -142,6 +142,27 @@ class GoInteropTest {
         }
     }
 
+    @Test(timeout = 60000) fun manualEndpointPreservesTrustForFilesAndText() {
+        GoReceiver().use { receiver ->
+            val actual = NodiInvite.parse(receiver.code)
+            val peer = TrustedDevice("Go", "192.0.2.1:1", actual.fingerprint.hex(), actual.token)
+            val endpoint = NodiEndpoint.normalize("127.0.0.1:${actual.port}")
+            val code = peer.code(endpoint)
+            val routed = NodiInvite.parse(code)
+            assertArrayEquals(actual.fingerprint, routed.fingerprint)
+            assertEquals(actual.token, routed.token)
+            assertEquals("192.0.2.1:1", peer.address)
+            send(code, "vpn.bin", byteArrayOf(1, 2, 3))
+            assertEquals("received", await(receiver.events).getString("type"))
+            assertArrayEquals(byteArrayOf(1, 2, 3), File(receiver.inbox, "vpn.bin").readBytes())
+            NodiTransfer().sendText(routed, "manual route")
+            assertEquals("manual route", await(receiver.events).getString("text"))
+            assertThrows(java.io.IOException::class.java) { send(changed(code, "fingerprint"), "bad.bin", byteArrayOf(4)) }
+            assertEquals("error", await(receiver.events).getString("type"))
+            assertFalse(File(receiver.inbox, "bad.bin").exists())
+        }
+    }
+
     @Test(timeout = 60000) fun kotlinToGoFilesAndNoOverwrite() {
         GoReceiver().use { receiver ->
             for ((name, bytes) in listOf("порожній.txt" to byteArrayOf(),

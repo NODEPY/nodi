@@ -385,7 +385,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.font = .systemFont(ofSize: 13); self.sendStatus.textColor = .secondaryLabelColor
         self.fileLabel.font = .systemFont(ofSize: 15, weight: .medium)
         self.devicePicker.controlSize = .large; self.devicePicker.heightAnchor.constraint(equalToConstant:38).isActive=true
-        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([self.addButton, NSView(), self.forgetButton]), self.deviceHint])
+        let endpointButton = NodiButton(title: "Адреса / VPN", target: self, action: #selector(editEndpoint)); endpointButton.bezelStyle = .rounded
+        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
         let network = NodiButton(title: "Мережа…", target: self, action: #selector(showNetwork)); network.bezelStyle = .rounded
         let receive = self.card([self.label("Отримати", size: 15, bold: true), self.receiveStatus, self.receiveButton, self.folderLabel, self.row([self.folderButton,open,network])])
         self.receiveStatus.maximumNumberOfLines=2
@@ -482,6 +483,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.activity.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.labelColor]))
         if self.activity.string.count > 20000 { self.activity.string = String(self.activity.string.suffix(12000)) }; self.activity.scrollToEndOfDocument(nil)
     }
+    private func manualEndpoint(_ pin: String) -> String? {
+        guard let value = self.preferences.string(forKey: "nodi.endpoint." + pin) else { return nil }
+        return NodiEndpoint.normalize(value)
+    }
+    private func endpoint(for peer: SavedDevice) -> String {
+        return self.manualEndpoint(peer.fingerprint) ?? self.discovered.first(where: { $0.pin == peer.fingerprint })?.address ?? peer.address
+    }
+    @objc private func editEndpoint() {
+        guard self.sender == nil, !self.stopping, self.wifiAlert == nil else { return }
+        let alert = NSAlert(); alert.messageText = NodiL("Адреса / VPN")
+        alert.informativeText = NodiL("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") + "\n\n" + NodiL("Адреси цього пристрою:") + "\n" + (self.invites.isEmpty ? NodiL("Увімкни приймання, щоб побачити адресу.") : self.invites.map { $0.address }.joined(separator: "\n"))
+        guard let peer = self.selectedDevice() else {
+            alert.addButton(withTitle: NodiL("Готово")); alert.beginSheetModal(for: self.window) { _ in }; return
+        }
+        alert.messageText = peer.name + " · " + NodiL("Адреса / VPN")
+        let input = NSTextField(string: self.manualEndpoint(peer.fingerprint) ?? self.endpoint(for: peer))
+        input.frame = NSRect(x: 0, y: 0, width: 340, height: 26)
+        input.placeholderString = "100.64.0.2:7331"
+        alert.accessoryView = input
+        alert.addButton(withTitle: NodiL("Зберегти"))
+        alert.addButton(withTitle: NodiL("Автоматично"))
+        alert.addButton(withTitle: NodiL("Скасувати"))
+        alert.beginSheetModal(for: self.window) { [weak self] response in
+            guard let self = self, self.sender == nil, self.saved.contains(where: { $0.fingerprint == peer.fingerprint }) else { return }
+            if response == .alertSecondButtonReturn {
+                self.preferences.removeObject(forKey: "nodi.endpoint." + peer.fingerprint)
+            } else if response == .alertFirstButtonReturn {
+                guard let value = NodiEndpoint.normalize(input.stringValue) else {
+                    let invalid = NSAlert(); invalid.messageText = NodiL("Введи IPv4:порт, наприклад 100.64.0.2:7331")
+                    invalid.beginSheetModal(for: self.window) { _ in }; return
+                }
+                self.preferences.set(value, forKey: "nodi.endpoint." + peer.fingerprint)
+            } else { return }
+            self.renderDevices()
+        }
+    }
     private func selectedDevice() -> SavedDevice? {
         guard let pin = self.devicePicker.selectedItem?.representedObject as? String else {
             return nil
@@ -503,7 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         for peer in self.saved {
             let online = self.discovered.contains { $0.pin == peer.fingerprint }
-            let status = NodiL(online ? "у мережі" : "не знайдено")
+            let status = NodiL(self.manualEndpoint(peer.fingerprint) != nil ? "Адреса вручну" : (online ? "у мережі" : "не знайдено"))
             appendDevice((self.discovered.first(where: { $0.pin == peer.fingerprint })?.name ?? peer.name) + " · " + status, peer.fingerprint)
         }
         for peer in self.discovered {
@@ -529,7 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.receiver?.command("wifi_select", pin: "*")
         }
         if let peer = self.selectedDevice() {
-            self.deviceHint.stringValue = self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : "Офлайн · увімкни приймання на телефоні"
+            self.deviceHint.stringValue = self.manualEndpoint(peer.fingerprint).map { NodiL("Адреса вручну") + " · " + $0 } ?? (self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : "Офлайн · увімкни приймання на телефоні")
         } else { self.deviceHint.stringValue = "Скануй новий QR телефоном" };self.setBusy(self.sender != nil)
     }
     @objc private func refreshDevices() { self.discoveryPromptPins.removeAll(); self.browser.refresh(); if self.receiver == nil { self.toggleReceive() } else { self.receiver?.command("wifi_select", pin: "*") } }
@@ -766,7 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func sendFile() {
         guard self.sender==nil,let peer=self.selectedDevice() else{return}
         guard !self.selectedFiles.isEmpty else{self.chooseFile();return}
-        let address=self.discovered.first(where:{$0.pin==peer.fingerprint})?.address ?? peer.address
+        let address=self.endpoint(for: peer)
         guard let code=peer.code(address:address) else{return}
         self.pendingFiles=self.selectedFiles;self.batchTotal=self.pendingFiles.count;self.batchSent=0
         self.sendCancelled=false;self.sendingText=false;self.activeSendPin=peer.fingerprint
@@ -840,7 +877,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.textStatus.stringValue = NodiL("Текст завеликий. Максимум — 64 КБ.")
             return
         }
-        let address = self.discovered.first(where: { $0.pin == peer.fingerprint })?.address ?? peer.address
+        let address = self.endpoint(for: peer)
         guard let code = peer.code(address: address),
               let payload = try? JSONSerialization.data(withJSONObject: ["code": code, "text": value]),
               let stdin = String(data: payload, encoding: .utf8) else { return }
@@ -1039,6 +1076,14 @@ func NodiL(_ original: String) -> String {
  return source
 }
 private let nodiWords: [String:[String]] = [
+"Зберегти": ["Save", "Сохранить"],
+"Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
+"Адреса вручну": ["Manual address", "Адрес вручную"],
+"Автоматично": ["Automatic", "Автоматически"],
+"Адреси цього пристрою:": ["This device’s addresses:", "Адреса этого устройства:"],
+"Увімкни приймання, щоб побачити адресу.": ["Enable receiving to see the address.", "Включи приём, чтобы увидеть адрес."],
+"Введи IPv4:порт, наприклад 100.64.0.2:7331": ["Enter IPv4:port, for example 100.64.0.2:7331", "Введи IPv4:порт, например 100.64.0.2:7331"],
+"Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.": ["Pair devices using QR or Wi-Fi first. Different networks need a VPN or direct access. Enter the other device’s IPv4:port; the port may change when its receiver restarts.", "Сначала свяжи устройства через QR или Wi-Fi. В разных сетях нужен VPN или прямой доступ. Введи IPv4:порт другого устройства; после перезапуска приёмника порт может измениться."],
 "Або перетягни файли сюди": ["Or drop files here", "Или перетащи файлы сюда"],
 "Текст і посилання":["Text and links", "Текст и ссылки"],
 "Вставити з буфера":["Paste from clipboard", "Вставить из буфера"],
@@ -1278,8 +1323,13 @@ final class NodiButton:NSButton {
 }
 
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.setActivationPolicy(.regular)
-app.delegate = delegate
-app.run()
+@main
+struct NodiApplication {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.setActivationPolicy(.regular)
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}
