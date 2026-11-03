@@ -306,17 +306,19 @@ class NodiReceiveService : Service() {
         val wifi = manager.allNetworks.flatMap { network ->
             val caps = manager.getNetworkCapabilities(network)
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
-                caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true)
+                caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true ||
+                caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true)
                 manager.getLinkProperties(network)?.linkAddresses?.map { it.address } ?: emptyList()
             else emptyList()
         }.filterIsInstance<Inet4Address>().filter { !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress }
             .mapNotNull { it.hostAddress }
-        if (wifi.isNotEmpty()) return wifi.distinct()
-        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
-        return Collections.list(interfaces).filter { it.isUp && !it.isLoopback &&
-            (it.name.startsWith("wlan") || it.name.startsWith("swlan") || it.name.startsWith("ap") || it.name.startsWith("eth")) }
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        val other = if (interfaces == null) emptyList() else Collections.list(interfaces)
+            .filter { it.isUp && !it.isLoopback }
             .flatMap { Collections.list(it.inetAddresses) }.filterIsInstance<Inet4Address>()
-            .filter { it.isSiteLocalAddress }.mapNotNull { it.hostAddress }.distinct()
+            .filter { !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress && !it.isMulticastAddress }
+            .mapNotNull { it.hostAddress }
+        return (wifi + other).distinct()
     }
 }
 

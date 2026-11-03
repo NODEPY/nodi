@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add per-paired-device manual IPv4:port routing on Android and macOS for reachable VPN/direct connections. File and text transfers keep the existing token and TLS pin; Automatic resets the route.
+- Show receiver endpoints and include VPN IPv4 interfaces on Android. Initial pairing still requires the existing QR/Wi-Fi flow; no relay or NAT traversal.
+- Add Kotlin/Swift address validation and a real manual-route TLS interoperability test.
+
 ## 1.0.0-alpha.5 — 2026-11-03
 
 - Fix the Go CI matrix: exclude macOS + Go 1.22 inside `matrix`, keeping Go 1.22 coverage on Ubuntu and stable Go on both platforms.

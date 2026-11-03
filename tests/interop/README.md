@@ -14,6 +14,9 @@ Gradle downloads Kotlin, JUnit and a JVM implementation of `org.json` on first u
 
 Coverage:
 
+- Strict numeric manual IPv4 endpoint validation, and manual-route file/text sending
+  preserving the saved token/certificate pin (including wrong-pin rejection).
+
 - Empty and 1 MiB binary files, Unicode filenames, byte-for-byte verification,
   duplicate-name rejection preserving original contents, in both directions.
 - Unicode text/links and the exact 64 KiB UTF-8 boundary in both directions;

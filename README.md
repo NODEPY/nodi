@@ -29,7 +29,7 @@ to the clipboard and kept in an in-memory history with Copy and Open actions.
 | Keep QR as an alternative | Choose your destination folder | Remove saved devices |
 | Confirm on either screen | Preview received images on Android | Copy or open received text |
 
-**Experimental alpha:** LAN only; no independent security audit.
+**Experimental alpha:** LAN discovery; manual IPv4 routes for paired devices over a reachable VPN. No independent security audit.
 See the known limitations and test status below before relying on a build.
 
 ## Quick start
@@ -91,12 +91,21 @@ On Mac the destination can be changed while the receiver is running; the receive
 
 ## Limitations
 
-No cross-network connection, folder transfer, resume or remote file browsing.
+Cross-network transfer requires an existing VPN or reachable IPv4/TCP route; no built-in relay or NAT traversal.
+Initial pairing still uses QR/Wi-Fi. No folder transfer, resume or remote file browsing.
 Text history is kept in memory only and is lost when the app closes.
 The Go receiver requires a destination filesystem supporting hard links (for example APFS;
 FAT/exFAT do not). Android uses a document-provider folder and has separate permission semantics.
 macOS builds are ad-hoc signed, not notarized; Android alpha builds use debug signing.
 For known test gaps and the device checklist, see [TESTING.md](TESTING.md).
+
+## Manual address / VPN (development version)
+
+Pair devices first, connect your VPN, then select a saved device → **Address / VPN**.
+Enter the other receiver's IPv4 address and current port. This route is saved and
+used for both files and text; **Automatic** restores discovery-based routing.
+The dialog also shows this device's receiver addresses. No new trust is granted
+by entering an address. See [setup and limits](docs/VPN-ADDRESS.md).
 
 ## Sharing from other apps
 
@@ -116,8 +125,8 @@ python3 scripts/check-core.py
 bash android/gradlew -p tests/interop test --no-daemon
 ```
 
-See [CLI documentation](docs/CLI.md). Windows, Linux desktop apps, cross-network
-connections, folder transfer and resume remain roadmap items.
+See [CLI documentation](docs/CLI.md). Windows, Linux desktop apps, automatic cross-network
+connections without a VPN, folder transfer and resume remain roadmap items.
 
 ## License
 
