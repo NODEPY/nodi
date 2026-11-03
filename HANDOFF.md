@@ -80,3 +80,4 @@ corrections to the other agent's work; no change to that rule was made here.
 - macos/NodiEndpoint.swift and tests/endpoint/main.swift.
 - tests/interop/.../EndpointTest.kt, GoInteropTest.kt.
 - CI (Go 1.22.x ubuntu, Go stable macos/ubuntu, interop) passed for PR #2 (checks 2) — verified 2026-11-03.
+- Not verified / manual acceptance pending: two devices on different networks via VPN both directions; receiver restart with port change; address persistence after app restart; unreachable endpoint; different-certificate device rejected; physical Android/macOS UI validation. Autotest is loopback only, not end-to-end VPN. Source update, no signed/notarized release.
