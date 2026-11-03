@@ -79,3 +79,4 @@ corrections to the other agent's work; no change to that rule was made here.
   Preferences: nodi.endpoint.<fingerprint>.
 - macos/NodiEndpoint.swift and tests/endpoint/main.swift.
 - tests/interop/.../EndpointTest.kt, GoInteropTest.kt.
+- CI (Go 1.22.x ubuntu, Go stable macos/ubuntu, interop) passed for PR #2 (checks 2) — verified 2026-11-03.
