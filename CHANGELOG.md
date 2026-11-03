@@ -1,21 +1,19 @@
 # Changelog
 
+## 1.0.0-alpha.5 — 2026-11-03
+
+- Fix the Go CI matrix: exclude macOS + Go 1.22 inside `matrix`, keeping Go 1.22 coverage on Ubuntu and stable Go on both platforms.
+- Align Android versionName/versionCode (1.0.0-alpha.5 / 5), macOS build number (7), and README.
+- Consolidate Alpha 4 notes, including text transfer, without duplicate Unreleased entries.
+- Package freshly built Android APK and Apple Silicon macOS app ZIP from the release commit, with SHA-256 checksums and a build report.
+- Preserve the existing Alpha 4 tag and assets. Manual device/UI validation and Strix assessment remain incomplete.
+
 ## 1.0.0-alpha.4 — 2026-11-02
 
 - Android: accept one or multiple files through Share → Nodi; shared text and links open the Text tab. Sending still requires an explicit tap.
 - macOS: drop up to 100 regular files into the window, with drop feedback and protection against replacing an active transfer.
 - Add standalone Kotlin ↔ Go TLS integration tests and CI reports.
 - macOS builds use a fresh module cache and support SDKROOT for compiler/SDK compatibility.
-
-## Unreleased — sharing shortcuts
-
-- Android: accept one or multiple files through Share → Nodi; shared text and links open the Text tab. Sending still requires an explicit tap.
-- macOS: drop up to 100 regular files into the window, with drop feedback and protection against replacing an active transfer.
-- Add standalone Kotlin ↔ Go TLS integration tests and CI reports.
-- macOS builds use a fresh module cache and support SDKROOT for compiler/SDK compatibility.
-
-
-## Unreleased
 
 ### ✨ New
 

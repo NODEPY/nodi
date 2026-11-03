@@ -43,5 +43,5 @@ xattr -dr com.apple.ResourceFork "$app_dir" 2>/dev/null || true
 codesign --force --sign - "$app_dir/Contents/MacOS/nodi-core"
 codesign --force --sign - "$app_dir"
 codesign --verify --deep --strict "$app_dir"
-open "$app_dir"
+if [ "${NODI_NO_OPEN:-0}" != "1" ]; then open "$app_dir"; fi
 printf '\nГотово: %s\nНаступного разу відкривай Nodi.app подвійним кліком.\n' "$app_dir"

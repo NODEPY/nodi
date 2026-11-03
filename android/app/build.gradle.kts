@@ -12,8 +12,8 @@ android {
         applicationId = "dev.nodi.android"
         minSdk = 29
         targetSdk = 37
-        versionCode = 3
-        versionName = "1.0.0-alpha.3"
+        versionCode = 5
+        versionName = "1.0.0-alpha.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

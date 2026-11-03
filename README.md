@@ -14,7 +14,7 @@
 
 ---
 
-## Meet Alpha 3
+## Meet Alpha 5
 
 Connect over Wi-Fi, confirm the matching code and start sharing. QR pairing stays
 available as an alternative. Android now has dedicated **Connections**, **Receive**,
@@ -47,11 +47,11 @@ The macOS archive contains `Nodi.app`; current builds are ad-hoc signed, not not
 
 ## Versioning
 
-This source version is **1.0.0-alpha.3** (tag `v1.0.0-alpha.3`).
+This source version is **1.0.0-alpha.5** (tag `v1.0.0-alpha.5`).
 See Downloads for published builds.
 Use `MAJOR.MINOR.PATCH-alpha.N` for prereleases and `MAJOR.MINOR.PATCH` for stable releases.
-Android `versionName` matches the release version; `versionCode` increases for each distributed build (this build: 3).
-macOS uses numeric `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 6`;
+Android `versionName` matches the release version; `versionCode` increases for each distributed build (this build: 5).
+macOS uses numeric `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 7`;
 its release tag identifies the alpha. Increase the build number for each distributed build.
 Go **1.22** is the minimum language/toolchain requirement in `go.mod`, not the app version.
 Go 1.23.2 in earlier testing notes described a test environment, not a separate requirement.

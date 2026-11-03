@@ -15,9 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         go: ['1.22.x', stable]
-      exclude:
-        - os: macos-latest
-          go: '1.22.x'
+        # Go 1.22's linker lacks LC_UUID required by current macOS runners.
+        exclude:
+          - os: macos-latest
+            go: '1.22.x'
     steps:
       - uses: actions/checkout@v6
         with:
