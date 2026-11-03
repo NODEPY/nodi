@@ -55,23 +55,57 @@ export class RelayHub {
     for (const ws of this.sockets(id)) {try {ws.close(1000, reason);} catch { /* already closed */ }}
   }
   prune(s) {for (const [id, room] of Object.entries(s.sessions)) if (room.deadline <= Date.now()) this.end(s,id,'expired');}
-  fetch(request) {
+  // Authenticate and charge the quota before reading a body. Then release the
+  // object lock while the client uploads; revalidate credentials before mutation.
+  async fetch(request) {
+    const admission = await this.ctx.blockConcurrencyWhile(async () => {
+      const s = await this.load(); this.prune(s);
+      const auth = await this.authorize(request, s, true);
+      await this.save(s); return auth;
+    });
+    if (admission instanceof Response) return admission;
+    const path = new URL(request.url).pathname;
+    let payload;
+    if (request.method === 'POST' && ['/v1/admin/devices', '/v1/sessions'].includes(path)) {
+      try { payload = await body(request); } catch { return fail(400, 'invalid_request'); }
+    }
     return this.ctx.blockConcurrencyWhile(async () => {
       const s = await this.load(); this.prune(s);
-      let result;
-      try {result = await this.route(request,s);} catch {result = fail(400,'invalid_request');}
+      const result = await this.route(request, s, payload);
       await this.save(s); return result;
     });
   }
-  async route(request,s) {
-    const path = new URL(request.url).pathname, method = request.method;
+  async authorize(request, s, charge) {
+    const path = new URL(request.url).pathname;
     const bearer = request.headers.get('Authorization') || '';
     if (!/^Bearer [a-f0-9]{64}$/.test(bearer)) return fail(401,'unauthorized');
     const digest = await hash(bearer.slice(7));
     if (path.startsWith('/v1/admin/')) {
       if (digest !== await hash(this.env.ADMIN_TOKEN)) return fail(401,'unauthorized');
+      if (charge) {
+        const now = Date.now();
+        if (!s.adminRate || now - s.adminRate.start >= 60_000) s.adminRate = {start:now, count:0};
+        if (++s.adminRate.count > 120) return fail(429,'rate_limit');
+      }
+      return {admin:true};
+    }
+    const found = Object.entries(s.devices).find(([,d]) => d.hash === digest);
+    if (!found) return fail(401,'unauthorized');
+    const [me, device] = found;
+    if (charge) {
+      const minute = Math.floor(Date.now()/60_000);
+      if (device.minute !== minute) {device.minute=minute; device.requests=0;}
+      if (++device.requests > 120) return fail(429,'rate_limit');
+    }
+    return {me, device};
+  }
+  async route(request, s, payload) {
+    const path = new URL(request.url).pathname, method = request.method;
+    const auth = await this.authorize(request, s, false);
+    if (auth instanceof Response) return auth;
+    if (auth.admin) {
       if (path === '/v1/admin/devices' && method === 'POST') {
-        const {id} = await body(request);
+        const {id} = payload;
         if (!idOK(id)) return fail(400,'invalid_device');
         if (s.devices[id]) return fail(409,'already_registered');
         if (Object.keys(s.devices).length >= MAX_DEVICES) return fail(429,'device_limit');
@@ -87,12 +121,7 @@ export class RelayHub {
       }
       return fail(404,'not_found');
     }
-    const found = Object.entries(s.devices).find(([,d]) => d.hash === digest);
-    if (!found) return fail(401,'unauthorized');
-    const [me, device] = found;
-    const minute = Math.floor(Date.now()/60_000);
-    if (device.minute !== minute) {device.minute=minute; device.requests=0;}
-    if (++device.requests > 120) return fail(429,'rate_limit');
+    const {me, device} = auth;
     const peerPath = path.match(/^\/v1\/peers\/([a-f0-9]{64})$/);
     if (peerPath && ['PUT','DELETE'].includes(method)) {
       const peer = peerPath[1];
@@ -110,7 +139,7 @@ export class RelayHub {
       return json({sessions:Object.entries(s.sessions).filter(([,r])=>r.receiver===me && !r.usedReceiver).map(([id,r])=>({id,from:r.sender,ticket:r.receiverTicket,expiresAt:r.deadline}))});
     }
     if (path==='/v1/sessions' && method==='POST') {
-      const {peer} = await body(request);
+      const {peer} = payload;
       if (!idOK(peer) || !device.peers.includes(peer) || !s.devices[peer]?.peers.includes(me)) return fail(403,'peer_not_authorized');
       const rooms = Object.values(s.sessions);
       if (rooms.length>=MAX_SESSIONS || rooms.filter(r=>[r.sender,r.receiver].includes(me)).length>=2 || rooms.filter(r=>[r.sender,r.receiver].includes(peer)).length>=2) return fail(429,'session_limit');
@@ -147,7 +176,6 @@ export class RelayHub {
       const peers=this.sockets(id).filter(x=>x.deserializeAttachment().me!==me);
       if (++r.messages>4096 || typeof message==='string' || message.byteLength>MAX_FRAME || !r.usedSender || !r.usedReceiver || peers.length!==1) this.end(s,id,'invalid_frame');
       else {
-        r.bytes+=message.byteLength;
         // Only one chunk may be in flight in each direction. The peer must ack
         // consumption before more data, bounding slow-reader queues.
         const key = me===r.sender ? 'senderPending' : 'receiverPending';
@@ -155,8 +183,8 @@ export class RelayHub {
         if (message.byteLength===0) {
           if (!r[other]) this.end(s,id,'unexpected_ack');
           else {r[other]=false;if(!this.send(peers[0],message))this.end(s,id,'peer_closed');}
-        } else if (r[key] || r.bytes>MAX_BYTES) this.end(s,id,'transfer_limit');
-        else {r[key]=true;if(!this.send(peers[0],message))this.end(s,id,'peer_closed');}
+        } else if (r[key] || message.byteLength>MAX_BYTES-r.bytes) this.end(s,id,'transfer_limit');
+        else {r.bytes+=message.byteLength;r[key]=true;if(!this.send(peers[0],message))this.end(s,id,'peer_closed');}
       }
       await this.save(s);
     });

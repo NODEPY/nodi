@@ -1,3 +1,35 @@
+# Latest checkpoint — relay availability and boundary fixes
+
+Updated: 2026-11-03. Branch `codex/internet-relay`; base for this change
+`1c083a4`. User asked to continue; current milestone remains server-side.
+
+- Moved bounded JSON body reading outside blockConcurrencyWhile. Admission
+  authenticates and charges quota first; final mutation reauthenticates against
+  current persisted state. This preserves revocation during an in-flight upload.
+- Added persisted admin quota: 120 authenticated requests per 60-second window.
+  Anonymous abuse still requires edge controls; this is not a global DDoS limit.
+- Check available byte budget before increasing counters or forwarding. The
+  previous code already rejected an excessive frame BEFORE forwarding; the
+  earlier note about exceeding the cap referred to accounting, not leaked data.
+- Tests verify another device remains responsive during a stalled upload,
+  revocation during upload, exactly 64 MiB accepted with the next byte rejected,
+  exactly 4096 frames accepted with the next rejected, and admin request 121.
+- Actual local results: `npm test` 19/19 PASS, 0 fail, 38.9 s; `npm run check`
+  PASS (Wrangler dry-run, 11.96 KiB / gzip 3.70 KiB); JS syntax checks and
+  `git diff --check` PASS. Node remains in /private/tmp/node-v22.23.4-darwin-arm64.
+- No dependency, Go, Android, macOS, root .gitignore or version changes.
+- No deployment/login/secret creation, PR, merge, tag or release. These tests
+  are local; the earlier remote CI results below apply to earlier commits.
+- Still outstanding: app integration/secure enrollment, deployed WSS validation,
+  physical cross-network testing, deployment interruption/load tests, and the
+  digest-comparison/LOCAL_TEST review questions. Device/global session limits
+  are not yet tested at every exact boundary.
+
+The prior checkpoint below is historical. Its slow-body/global-lock, missing
+admin quota and byte-accounting notes are superseded by the fixes above.
+
+---
+
 # Current checkpoint — Internet relay (private alpha server)
 
 Updated: 2026-11-03. Branch `codex/internet-relay`, based on PR #2 HEAD

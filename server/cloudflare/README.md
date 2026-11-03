@@ -18,7 +18,8 @@ npm run check
 Tests run the actual local Workers runtime (Miniflare), not an imitation of
 Durable Objects. They cover authorization, mutual grants, private presence,
 binary duplex forwarding, one-use tickets, revocation, quotas, malformed
-frames, request-body deadlines, expiration, and TLS 1.3 with a pinned test
+frames, request-body deadlines and concurrent access during uploads, revocation during
+upload, exact byte/frame/admin quotas, expiration, and TLS 1.3 with a pinned test
 certificate over WebSockets.
 The TLS test is a transport test, not an Android/Go Nodi interoperability test.
 `npm run check` packages the Worker with `wrangler deploy --dry-run`; it does
@@ -61,6 +62,9 @@ The service can observe device IDs, IPs, timing, and traffic size.
 Except GET /health, all endpoints require `Authorization: Bearer <64 hex token>`.
 JSON responses have Cache-Control: no-store. JSON request bodies are limited
 to 1024 bytes and are rejected if they are not complete within 5 seconds.
+Authentication and request quotas are checked before reading the body. Uploads
+do not hold the shared Durable Object lock; credentials and current peer grants
+are checked again before any mutation, including after concurrent revocation.
 Tokens and tickets must not be placed in URLs or logs.
 
 | Method and path | Credential | Request / result |
@@ -104,7 +108,8 @@ On a successful WebSocket upgrade, wait for the text control message
 
 One SQLite-backed Durable Object holds a bounded private-alpha registry:
 64 devices, 16 concurrent sessions, at most 2 sessions involving each device,
-120 authenticated API requests/device/minute, 30-second rendezvous timeout,
+120 authenticated API requests/device/minute, 120 authenticated admin requests
+per 60-second window, 30-second rendezvous timeout,
 10-minute paired lifetime, 64 MiB combined tunnel bytes and 4096 frames/session
 (including acknowledgements). The content limit includes TLS overhead, so the
 maximum actual file is smaller. These are alpha safety limits, not product limits.
@@ -115,6 +120,7 @@ can be delivered by authenticated polling. Authorization and replay flags are
 persisted before external results become visible. Expiration uses DO alarms;
 request handlers also prune expired rooms. Hibernating sockets use attachments
 for session/participant identity. Closing/deleting a room invalidates its tickets.
+Byte limits are checked before forwarding and before increasing the byte counter.
 No names, file contents, or transfer tokens are stored. Revoked device records
 are removed; local test state stays in ignored .wrangler directories.
 

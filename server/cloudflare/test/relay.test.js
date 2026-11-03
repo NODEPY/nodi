@@ -74,7 +74,7 @@ test('malformed and oversized bodies rejected without registration',async()=>{
 function streamedBody(text,{close=false}={}){
  let controller;
  const body=new ReadableStream({start(c){controller=c;c.enqueue(new TextEncoder().encode(text));if(close)c.close();}});
- return {body,close(){try{controller.close();}catch{ /* already closed or cancelled */ }}};
+ return {body,append(text){controller.enqueue(new TextEncoder().encode(text));},close(){try{controller.close();}catch{ /* already closed or cancelled */ }}};
 }
 // Call the Worker entrypoint directly: an HTTP client that is still uploading
 // sees a reset when the server abandons a slow body, which is runtime-specific.
@@ -82,8 +82,14 @@ function bodyCall(stream){
  return worker.fetch('https://relay.test/v1/admin/devices',{method:'POST',duplex:'half',headers:{Authorization:`Bearer ${admin}`,'Content-Type':'application/json'},body:stream});
 }
 test('slow and truncated request bodies are bounded and never register a device',{timeout:15000},async()=>{
+ const active=await device();
  const slowId=fresh(),slow=streamedBody(`{"id":"${slowId}"`);
- const started=Date.now(),slowResponse=await bodyCall(slow.body),slowElapsed=Date.now()-started;
+ const started=Date.now(),pending=bodyCall(slow.body);
+ await new Promise(resolve=>setTimeout(resolve,100));
+ const otherStarted=Date.now();
+ assert.equal((await call('/v1/incoming',active.token)).status,200);
+ assert.ok(Date.now()-otherStarted<2000,'slow upload must not lock out other devices');
+ const slowResponse=await pending,slowElapsed=Date.now()-started;
  slow.close();
  assert.equal(slowResponse.status,400);
  assert.ok(slowElapsed>=4500,`expected the 5s body timeout, got ${slowElapsed}ms`);
@@ -190,4 +196,46 @@ for (const badPin of [false,true]) test(badPin ? 'inner TLS rejects an incorrect
   sender.write(payload);await delivered;assert.deepEqual(Buffer.concat(chunks),payload);
   const reply=once(sender,'data');receiver.write('received');assert.equal((await reply)[0].toString(),'received');
  } finally {sender.destroy();receiver.destroy();}
+});
+
+
+test('revoking a credential during upload prevents the pending mutation',async()=>{
+ const a=await device(),b=await device();await pair(a,b);
+ const stream=streamedBody('{"peer":');
+ const pending=worker.fetch('https://relay.test/v1/sessions',{method:'POST',duplex:'half',headers:{Authorization:`Bearer ${a.token}`,'Content-Type':'application/json'},body:stream.body});
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.equal((await call(`/v1/admin/devices/${a.id}`,admin,'DELETE')).status,200);
+ stream.append(`"${b.id}"}`);stream.close();
+ assert.equal((await pending).status,401);
+ assert.deepEqual((await (await call('/v1/incoming',b.token)).json()).sessions,[]);
+});
+
+for (const limit of ['bytes','frames']) test(`exact ${limit} limit forwards no excess data`,{timeout:60000},async()=>{
+ const a=await device(),b=await device();await pair(a,b);const [out,inc]=await room(a,b);
+ const wa=(await join(a,out)).webSocket;wa.accept();const nextA=messages(wa);
+ const wb=(await join(b,inc)).webSocket;wb.accept();const nextB=messages(wb);
+ await nextA();await nextB();
+ const chunk=new Uint8Array(limit==='bytes'?65536:1);
+ const count=limit==='bytes'?1024:2048;
+ let delivered=0;
+ wb.addEventListener('message',e=>{if(typeof e.data!=='string')delivered+=e.data.byteLength;});
+ for(let i=0;i<count;i++){
+  wa.send(chunk);assert.equal((await nextB()).byteLength,chunk.length);
+  wb.send(new ArrayBuffer(0));assert.equal((await nextA()).byteLength,0);
+ }
+ const ended=closed(wb);
+ wa.send(new Uint8Array([99]));await ended;
+ assert.equal(delivered,count*chunk.length);
+ assert.equal((await join(a,out)).status,404);
+ wa.close();wb.close();
+});
+
+test('admin quota admits 120 requests and rejects the next',async()=>{
+ const isolated=new Miniflare({modules:true,script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin}});
+ try {
+  const request=token=>isolated.dispatchFetch('https://relay.test/v1/admin/unknown',{headers:{Authorization:`Bearer ${token}`}});
+  assert.equal((await request(fresh())).status,401);
+  for(let i=0;i<120;i++)assert.equal((await request(admin)).status,404);
+  assert.equal((await request(admin)).status,429);
+ } finally {await isolated.dispose();}
 });
