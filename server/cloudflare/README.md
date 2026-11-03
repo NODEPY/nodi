@@ -2,7 +2,9 @@
 
 Server implementation for cross-network transfers without entering IP addresses.
 Android and macOS integration is **not implemented yet**. This server does not
-replace local pairing and does not store files. No deployment has been made.
+replace local pairing and does not store files. Private-alpha deployment: https://nodi-relay.igor-shura2011faik.workers.dev
+(2026-11-03; source commit c75730f). Public HTTPS/WSS and a pinned TLS 1.3
+transport smoke test passed; actual app integration is still pending.
 The original Go loopback prototype is independent and uses a different protocol.
 
 ## Run and verify locally
@@ -128,7 +130,7 @@ Deployment/restart may disconnect active sockets. Clients must handle this as
 an interrupted transfer. Authentication state persists. No delivery guarantee
 is made for in-flight transfers across deployments.
 
-## Deployment (not executed)
+## Deployment and operations
 
 Use a Cloudflare account with Workers and SQLite Durable Objects available.
 The configuration includes the SQLite migration required by the Free plan.
@@ -151,7 +153,12 @@ The lockfile pins development tooling. Overrides update undici and sharp because
 the selected Miniflare release's transitive versions had npm audit advisories.
 They are not bundled into the deployed Worker. Recheck tests when updating them.
 
-Remaining: deployed HTTPS/WSS check; real Android/macOS client integration and
+Public HTTPS/WSS was checked on 2026-11-03 with two temporary test devices,
+a 150,000-byte payload inside pinned TLS 1.3, and a reverse reply. Both test
+registrations were removed. The deployed admin key is a Worker secret; the
+ignored local recovery file .dev.vars.relay-admin has permissions 0600.
+
+Remaining: real Android/macOS client integration and
 secure enrollment UI; physical devices on different networks; interrupt/restart
 and load tests on Cloudflare; independent security review. No published app can
 use this API yet. Public self-service enrollment and initial remote pairing are

@@ -1,3 +1,46 @@
+# Latest checkpoint — Cloudflare deployed and remotely verified
+
+Updated: 2026-11-03. Branch `codex/internet-relay`. Deployed source commit
+`c75730f` (the later documentation commit does not change Worker code).
+User authorized Cloudflare deployment and explicitly confirmed creating,
+locally storing, and uploading the ADMIN_TOKEN after an approval review block.
+
+- Live endpoint: https://nodi-relay.igor-shura2011faik.workers.dev
+- Worker: nodi-relay; SQLite Durable Object binding HUB / RelayHub.
+- Active version: `f4428c60-d4c7-40e7-86a7-3fd67e232a93`, deployed
+  2026-11-03T19:56:20.380Z following secret configuration. Initial source upload
+  was version `b712c6f6-d520-4e2f-98e6-e900ffce0389`.
+- Wrangler OAuth login completed with the user's browser consent. The account
+  initially had no workers.dev subdomain; opening its Workers dashboard created
+  igor-shura2011faik.workers.dev. Dashboard showed 100,000 requests/day allowance.
+  No paid plan was enabled or payment submitted. OAuth subscriptions endpoint
+  returned 403; account-settings returned default_usage_model=standard, which
+  alone is not a billing-plan proof.
+- ADMIN_TOKEN is set as a Worker secret. Local recovery copy is
+  server/cloudflare/.dev.vars.relay-admin, mode 0600 and git-ignored (verified).
+  Never print, commit, upload elsewhere, or include this key in app builds.
+  No LOCAL_TEST variable was deployed. Secret values were not printed.
+- Public HTTPS initially failed TLS handshakes on the new hostname; it later
+  succeeded without disabling certificate verification or changing TLS policy.
+- Remote smoke test PASS: /health=200, unauthenticated /v1/incoming=401,
+  registration of two synthetic test devices, mutual grants, role-bound tickets,
+  public WSS rendezvous, inner pinned TLS 1.3, exact 150,000-byte random payload,
+  and reverse reply. Both temporary device registrations deleted (2/2).
+- Smoke driver is /private/tmp/nodi-relay-smoke.mjs; it uses existing dev
+  dependencies and public test-only TLS fixtures. This was a transport test,
+  NOT real Nodi Android/Go application interoperability or physical-device test.
+- No Android/macOS integration or enrollment UI yet. Next milestone is secure
+  per-device enrollment and client WebSocket transport with automatic routing.
+  Keep existing device pins/tokens; never embed ADMIN_TOKEN in clients.
+- No GitHub push/PR/merge/tag/release in this deployment step. PR #2 merge status
+  has not been rechecked. Local commits remain ahead of origin.
+
+Previous no-deployment/no-secret statements below are historical and superseded
+by this checkpoint. Server performance and public abuse controls still need
+further validation before broad rollout.
+
+---
+
 # Latest checkpoint — relay availability and boundary fixes
 
 Updated: 2026-11-03. Branch `codex/internet-relay`; base for this change
