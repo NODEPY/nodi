@@ -336,6 +336,7 @@ class MainActivity : Activity() {
         deviceActions.removeView(forgetButton);deviceHeader.addView(forgetButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(scanButton,8,dp(44))
+        deviceCard.addItem(button("Інтернет") { internetSettings() },8,dp(44))
         deviceCard.addItem(button("Адреса / VPN") { editEndpoint() },8,dp(44))
         connectionColumn.addItem(deviceCard, 16)
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
@@ -527,7 +528,7 @@ class MainActivity : Activity() {
             textStatus.text = friendlyError(error)
             return
         }
-        val session = NodiTransfer()
+        val session = NodiTransfer(NodiInternetStore.client(this))
         texting = true; transfer = session; batchCancelled = false
         textStatus.text = "Надсилаю текст…"
         renderBusy()
@@ -610,6 +611,27 @@ class MainActivity : Activity() {
         if (uri.host.isNullOrEmpty()) return null
         return uri
     }
+    private fun internetSettings() {
+        if(busy || texting || pairing || scanning)return
+        val input=EditText(this).apply {
+            hint="Код активації приватної альфи"
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        fun activate(raw:String) {
+            try { NodiInternetStore.activate(this,raw.trim());receiverService?.refreshInternet();status.text="Інтернет увімкнено" }
+            catch(_:Exception){status.text="Код не підходить цьому пристрою"}
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Інтернет Nodi")
+            .setMessage(if(NodiInternetStore.client(this)!=null) "Увімкнено. Nodi автоматично використає інтернет, якщо локальне з’єднання недоступне. Ліміт альфи — до 16 MiB на файл." else "Активуй цей пристрій кодом приватної альфи. IP-адреси й VPN не потрібні. Спарювання пристроїв виконується через звичайний QR.")
+            .setView(input).setPositiveButton("Активувати"){_,_->activate(input.text.toString())}
+            .setNegativeButton("Закрити",null)
+            .setNeutralButton(if(NodiInternetStore.client(this)!=null) "Вимкнути" else "Сканувати QR"){_,_->
+                if(NodiInternetStore.client(this)!=null){NodiInternetStore.clear(this);receiverService?.refreshInternet();status.text="Інтернет вимкнено"}
+                else GmsBarcodeScanning.getClient(this,GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+                    .startScan().addOnSuccessListener{barcode->ui{activate(barcode.rawValue ?: "")}}
+            }.show()
+    }
+
     private fun parseSelectedInvite(): NodiInvite {
         val invite = NodiInvite.parse(code.text.toString())
         require(deviceBook.list().any { peer -> peer.token == invite.token && peer.fingerprint == invite.fingerprint.hex() }) {
@@ -855,7 +877,7 @@ class MainActivity : Activity() {
             try {
                 for((index,file) in files.withIndex()) {
                     if(batchCancelled)throw CancellationException()
-                    val session=NodiTransfer();transfer=session
+                    val session=NodiTransfer(NodiInternetStore.client(this));transfer=session
                     if(batchCancelled){session.cancel();throw CancellationException()}
                     session.send(invite,file.name,file.size,cacheDir,
                         openSource={contentResolver.openInputStream(file.uri) ?: throw IOException("Не вдалося прочитати вибраний файл.")},
@@ -1009,7 +1031,7 @@ class MainActivity : Activity() {
         receiverProgress.isIndeterminate = receiverState.total == 0L || receiverState.status.startsWith("Перевіряю")
         if (receiverState.total > 0) receiverProgress.progress =
             (receiverState.bytes * 1000 / receiverState.total).coerceIn(0, 1000).toInt()
-        receiverStatus.text = if (choosingFolder) "Перевіряю папку…" else receiverState.status
+        receiverStatus.text = if (choosingFolder) "Перевіряю папку…" else receiverState.status + if(receiverState.internet.isNotEmpty()) " · "+receiverState.internet else ""
         receiverDetail.text = (if (receiverState.status.startsWith("Очікую")) "Лише підключені пристрої · до 1 год" else receiverState.detail) + if (receiverState.transferring && receiverState.total > 0)
             "\n${formatBytes(receiverState.bytes)} / ${formatBytes(receiverState.total)}" else ""
     }
@@ -1142,7 +1164,7 @@ class MainActivity : Activity() {
         }
         val ownPin=runCatching {NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex()}.getOrNull()
         val allValues=(values+nearbyAll.filter {found -> found.pin!=ownPin && stored.none {it.fingerprint==found.pin}}).distinctBy {it.pin}
-        val titles = allValues.map { "${it.name} · " + when {manualEndpoint(it.pin) != null && stored.any { p -> p.fingerprint == it.pin } -> tr("Адреса вручну");stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");else -> tr("не знайдено")} }
+        val titles = allValues.map { "${it.name} · " + when {manualEndpoint(it.pin) != null && stored.any { p -> p.fingerprint == it.pin } -> tr("Адреса вручну");stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");NodiInternetStore.client(this)!=null -> "Спробуємо через інтернет";else -> tr("не знайдено")} }
         if (allValues != nearby || titles != nearbyTitles) {
             nearby = allValues; nearbyTitles = titles
             nearbyPicker.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, titles) {

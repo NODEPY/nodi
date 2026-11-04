@@ -29,6 +29,7 @@ data class ReceiverState(val active: Boolean = false, val stopping: Boolean = fa
     val status: String = "Приймання вимкнене", val detail: String = "",
     val invites: List<PhoneInvite> = emptyList(), val bytes: Long = 0, val total: Long = 0,
     val acceptingFiles: Boolean = false, val transferring: Boolean = false, val pairing: PairRequest? = null,
+    val internet: String = "",
     val lastText: String = "", val lastTextAt: Long = 0L)
 
 /** Explicitly started, visible foreground receiver. No boot start, no silent restart. */
@@ -41,10 +42,21 @@ class NodiReceiveService : Service() {
         private const val NOTIFICATION = 7331
         private const val SESSION_MS = 60 * 60 * 1000L
     }
+    fun refreshInternet() {
+        val current=session ?: return
+        current.internet?.close();current.internet=null
+        val receiver=current.receiver ?: return
+        val client=NodiInternetStore.client(this)
+        if(client==null){publish(state.copy(internet=""));return}
+        current.internet=client.receive(receiver.port,{NodiDeviceStore.get(this).list().map{it.fingerprint}}){message->
+            main.post{if(session===current && !current.cancelled.get())publish(state.copy(internet=message))}
+        }
+    }
     inner class LocalBinder : Binder() { val service: NodiReceiveService get() = this@NodiReceiveService }
     private class Session {
         val cancelled = AtomicBoolean(false)
         @Volatile var receiver: NodiReceiver? = null
+        @Volatile var internet: java.io.Closeable? = null
     }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -147,8 +159,7 @@ class NodiReceiveService : Service() {
             var failure: String? = null
             var identity: NodiIdentity? = null
             try {
-                val addresses = localAddresses()
-                if (addresses.isEmpty()) throw ReceiveFailure("no local network")
+                val addresses = localAddresses().ifEmpty { if(NodiInternetStore.client(this)!=null) listOf("127.0.0.1") else throw ReceiveFailure("no local network") }
                 val store = destination
                 val temp = File(cacheDir, "receive").apply { mkdirs() }
                 // The preceding session has finished; only our own private snapshots are removed.
@@ -173,6 +184,7 @@ class NodiReceiveService : Service() {
                     if (session === current && !current.cancelled.get()) {
                         advertiser?.stop()
                         advertiser = NodiAdvertiser(this, receiver.port, receiver.fingerprint)
+                        refreshInternet()
                         publish(ReceiverState(active = true, status = "Готово до підключення", invites = invites,
                             detail = "Папка потрібна лише для отримання файлів."))
                         getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification("Готово до підключення"))
@@ -187,6 +199,7 @@ class NodiReceiveService : Service() {
                         else error.javaClass.simpleName + ": " + (error.message ?: "Cannot start receiver")
                 }
             } finally {
+                current.internet?.close()
                 current.receiver?.close()
                 identity?.close()
                 val message = failure
@@ -240,6 +253,7 @@ class NodiReceiveService : Service() {
         destination.current = null
         stopMessage = message
         current.cancelled.set(true)
+        current.internet?.close()
         decision?.latch?.countDown()
         advertiser?.stop(); advertiser = null
         closeNetwork(current)

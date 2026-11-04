@@ -35,3 +35,10 @@ The receiver uses a test filesystem adapter instead of Storage Access Framework,
 and fresh JVM-generated keys instead of AndroidKeyStore. Android TLS providers,
 UI, service lifecycle, clipboard, mDNS, Wi-Fi pairing approval, revocation during
 an active transfer, and physical-device/network behavior still need separate tests.
+
+The opt-in `publicRelayKotlinGoFilesAndTextBothDirections` test requires
+`NODI_TEST_RELAY_ADMIN` in the environment. It registers two temporary identities
+on the configured public relay, forces LAN connection failure, sends 180,000-byte
+files and Unicode text in both directions using production Go/Kotlin relay
+clients, and deletes registrations in `finally`. Never put the admin token in
+source or command-line arguments. Run this only against an authorized deployment.

@@ -1,3 +1,67 @@
+# Latest checkpoint — Android/macOS Internet integration
+
+Updated: 2026-11-04. Branch `codex/internet-relay`; base `ceb5c1c`.
+User requested completing integration autonomously. No merge, release, tag,
+version bump, paid-plan change or force push.
+
+## Implemented
+
+- Go and production Kotlin WebSocket clients connect through the deployed
+  Cloudflare relay. Direct TCP is tried first (4-second timeout); only TCP
+  connection failure triggers relay. TLS/authentication failures do not retry.
+- Existing pinned TLS and pairing token checks run inside WSS. Relay does not
+  receive plaintext files/text. Per-device credentials are separate from admin.
+- Receiver polling every 10 seconds, local paired-device allowlist, mutual grants,
+  session cancellation, bounded buffers and consumption ACKs. Internet alpha
+  limits files to 16 MiB; LAN file limit remains unchanged.
+- Internet activation UI on both clients; Android supports scanning activation QR.
+  Android encrypts credentials using AndroidKeyStore, excludes them from backup;
+  Mac uses Keychain. Codes are bound to the existing device certificate pin.
+- Mobile-data-only Android receiver can start without a Wi-Fi IPv4 address.
+- Fixed Go duplex deadlock: inbound delivery no longer blocks reading the ACK
+  that releases outgoing TLS writes. Regression test exercises incoming data
+  arriving before ACK while the application writes before reading.
+
+## Validation
+
+- `go vet ./...` and `go test -race ./...`: PASS.
+- `go test -race -count=5 ./internal/internet`: PASS (both stream tests).
+- Android `assembleDebug testDebugUnitTest`: BUILD SUCCESSFUL (12s).
+- Mac build with MacOSX26.5 SDK: PASS, plist lint and ad-hoc signature verification
+  PASS. Built with NODI_NO_OPEN=1, so existing user app was not interrupted.
+- Public Kotlin/Go test after duplex fix: PASS (53s). Uses production polling
+  clients, forced LAN failure, 180,000-byte files and Unicode text both ways,
+  byte-for-byte comparison and temporary device cleanup.
+- Full interop suite including a second public run: 10/10 PASS, BUILD SUCCESSFUL
+  (54s). Two consecutive public runs passed after the duplex fix.
+- Earlier public runs exposed the deadlock; one also failed before transport
+  setup with NoRouteToHost to the public API. Do not count these as passing runs.
+- Physical Android/macOS UI, KeyStore/Keychain activation and mobile-data↔Wi-Fi
+  behavior are NOT yet verified. These require installing the new builds.
+
+## User artifacts and activation (local only)
+
+- `build/nodi-android-internet.apk`: 17,057,492 bytes, 2026-11-04 20:04:23 EET.
+  SHA-256: `91f5d0a83ef9589ce8b8d3768c66b79eb41d2fd9075bdfc348d6cedd7015cc98`.
+- `build/Nodi.app` and `build/nodi-macos-internet.zip`: zip 6,262,894 bytes,
+  SHA-256: `2279fba5a444d035663087de0ca3cf88ad4ceeec109b31a19c66d72014f9f0c4`.
+- APK keeps 1.0.0-alpha.5 / code 5 and existing debug signing key. Install over the
+  existing app (do not uninstall/clear data, which would change device identity).
+- Real Mac and paired S21 FE registrations already created on Cloudflare.
+  DO NOT register/rotate them again. Secrets are only in ignored
+  `build/internet-activation/{mac.txt,android.txt,android-qr.png}`, files 0600,
+  directory 0700. Never print/publish these codes or include them in Git/builds.
+- Activation still needs to be imported through each app's Internet UI: paste
+  mac.txt on Mac; scan android-qr.png on phone. Keep receiving enabled on both.
+- Instructions and manual test checklist: `docs/INTERNET-ALPHA.md`.
+- Root .gitignore rule `nodi` intentionally unchanged; new Kotlin files must be
+  explicitly force-added. No admin key belongs in any client.
+
+Historical checkpoints below describe their own point in time; statements that
+client integration/provisioning is absent are superseded by this checkpoint.
+
+---
+
 # Latest checkpoint — Cloudflare deployed and remotely verified
 
 Updated: 2026-11-03. Branch `codex/internet-relay`. Deployed source commit

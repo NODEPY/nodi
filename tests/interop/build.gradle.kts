@@ -8,6 +8,7 @@ kotlin.compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.J
 
 repositories { mavenCentral() }
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")
     testImplementation("junit:junit:4.13.2")
 }
@@ -15,7 +16,7 @@ dependencies {
 // Compile the actual Android transport sources, not a second protocol implementation.
 kotlin.sourceSets.main {
     kotlin.srcDir("../../android/app/src/main/java")
-    kotlin.include("**/NodiProtocol.kt", "**/NodiReceiver.kt", "**/NodiPairing.kt", "**/NodiDevices.kt", "**/NodiEndpoint.kt")
+    kotlin.include("**/NodiProtocol.kt", "**/NodiReceiver.kt", "**/NodiPairing.kt", "**/NodiDevices.kt", "**/NodiEndpoint.kt", "**/NodiInternet.kt")
 }
 
 val core = layout.buildDirectory.file("nodi-core")

@@ -31,7 +31,7 @@ echo '2/3 · Збираю нативне вікно…'
 xcrun swiftc -swift-version 5 -O -target "$swift_target" \
     -sdk "$sdk_path" \
     -module-cache-path "$module_cache" \
-    -framework AppKit -framework QuartzCore -framework UniformTypeIdentifiers -framework ImageIO -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreImage macos/Nodi.swift macos/NodiEndpoint.swift -o "$app_dir/Contents/MacOS/Nodi"
+    -framework AppKit -framework QuartzCore -framework UniformTypeIdentifiers -framework ImageIO -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreImage macos/Nodi.swift macos/NodiEndpoint.swift macos/NodiInternet.swift -o "$app_dir/Contents/MacOS/Nodi"
 cp macos/Info.plist "$app_dir/Contents/Info.plist"
 cp macos/Nodi.icns "$app_dir/Contents/Resources/Nodi.icns"
 cp android/app/src/main/assets/NodiMark.png "$app_dir/Contents/Resources/NodiMark.png"

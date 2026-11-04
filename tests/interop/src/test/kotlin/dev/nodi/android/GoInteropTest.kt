@@ -25,14 +25,22 @@ class GoInteropTest {
     private fun await(queue: LinkedBlockingQueue<JSONObject>): JSONObject =
         queue.poll(15, TimeUnit.SECONDS) ?: error("Timed out waiting for Go event")
 
-    private inner class GoReceiver : Closeable {
+    private inner class GoReceiver(storage:File?=null, relayToken:String?=null, ownPin:String?=null) : Closeable {
         val inbox = temp.newFolder()
         val events = LinkedBlockingQueue<JSONObject>()
-        private val process = ProcessBuilder(core, "receive", "-json", "-listen", "127.0.0.1:0",
-            "-out", inbox.absolutePath).redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        private val process = run {
+            val args=mutableListOf(core,"receive","-json","-listen","127.0.0.1:0","-out",inbox.absolutePath)
+            if(storage!=null)args.addAll(listOf("-devices",storage.absolutePath))
+            ProcessBuilder(args).apply {
+                if(relayToken!=null){environment()["NODI_RELAY_TOKEN"]=relayToken;environment()["NODI_RELAY_DIAGNOSTICS"]="1"}
+                if(ownPin!=null)environment()["NODI_RELAY_PIN"]=ownPin
+            }.redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        }
         private val reader = Thread {
             process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { events.put(JSONObject(it)) }
+                lines.forEach { val event=JSONObject(it)
+                    if(relayToken!=null && event.optString("type") in listOf("internet","error") && event.optString("message")!="Інтернет увімкнено")System.err.println(event.optString("message"))
+                    events.put(event) }
             }
         }.apply { isDaemon = true; start() }
         val code: String
@@ -51,7 +59,7 @@ class GoInteropTest {
         }
     }
 
-    private fun go(command: String, code: String, file: File? = null, text: String = ""): Int {
+    private fun go(command: String, code: String, file: File? = null, text: String = "", relayToken: String? = null): Int {
         val args = mutableListOf(core, command, "-json")
         val input = if (command == "send-text") {
             args.add("-stdin")
@@ -61,10 +69,18 @@ class GoInteropTest {
             code
         }
         val output = temp.newFile()
-        val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
+        val builder = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output)
+        if(relayToken!=null)builder.environment()["NODI_RELAY_TOKEN"]=relayToken
+        val process=builder.start()
         try {
             process.outputStream.bufferedWriter().use { it.write(input) }
-            check(process.waitFor(15, TimeUnit.SECONDS)) { "Go sender timed out" }
+            check(process.waitFor(if(relayToken==null)15 else 60, TimeUnit.SECONDS)) { "Go sender timed out" }
+            if(process.exitValue()!=0 && relayToken!=null) {
+                output.readLines().forEach { line ->
+                    val event=runCatching{JSONObject(line)}.getOrNull()
+                    if(event?.optString("type") in listOf("error","fatal"))System.err.println("Relay Go failure: "+event?.optString("message"))
+                }
+            }
             return process.exitValue()
         } finally {
             if (process.isAlive) {
@@ -140,6 +156,54 @@ class GoInteropTest {
             assertFalse("Kotlin receiver did not stop", worker.isAlive)
             assertEquals("Receive snapshots must be removed", 0, cache.listFiles()!!.size)
         }
+    }
+
+    /** Opt-in real deployed relay test; no account secrets are stored in source. */
+    @Test(timeout=180000) fun publicRelayKotlinGoFilesAndTextBothDirections() {
+        val adminToken=System.getenv("NODI_TEST_RELAY_ADMIN")
+        org.junit.Assume.assumeTrue("Requires explicitly enabled remote smoke test", !adminToken.isNullOrEmpty())
+        val admin=NodiInternet(adminToken!!)
+        val registered=mutableListOf<String>()
+        try {
+            val storage=temp.newFolder()
+            val goPin=GoReceiver(storage).use { NodiInvite.parse(it.code).fingerprint.hex() }
+            KotlinReceiver().use { kotlinReceiver ->
+                val k=NodiInvite.parse(kotlinReceiver.code)
+                fun register(pin:String):String {
+                    val token=admin.api("POST","/v1/admin/devices",JSONObject().put("id",pin)).getString("token")
+                    registered.add(pin);return token
+                }
+                val goToken=register(goPin);val kotlinToken=register(k.fingerprint.hex())
+                val goPairToken="c".repeat(64)
+                File(storage,"devices.json").writeText(org.json.JSONArray().put(JSONObject()
+                    .put("name","Kotlin").put("address","127.0.0.1:1").put("fingerprint",k.fingerprint.hex()).put("token",goPairToken)).toString())
+                val kotlinRelay=NodiInternet(kotlinToken,diagnostic={System.err.println("Kotlin: "+it)})
+                kotlinRelay.api("PUT","/v1/peers/$goPin")
+                GoReceiver(storage,goToken,goPin).use { goReceiver ->
+                    fun next(type:String):JSONObject {
+                        val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(40)
+                        while(System.nanoTime()<until){val event=goReceiver.events.poll(1,TimeUnit.SECONDS)?:continue;if(event.optString("type")==type)return event}
+                        error("Missing Go event: $type")
+                    }
+                    assertEquals("Інтернет увімкнено",next("internet").getString("message"))
+                    val toGo=TrustedDevice("Go","127.0.0.1:1",goPin,goPairToken).code()
+                    val toKotlin=TrustedDevice("Kotlin","127.0.0.1:1",k.fingerprint.hex(),k.token).code()
+                    kotlinRelay.receive(k.port,{listOf(goPin)},{}).use {
+                        val data=ByteArray(180000){(it%251).toByte()}
+                        send(toGo,"relay-kotlin.bin",data,NodiTransfer(kotlinRelay))
+                        next("received")
+                        assertArrayEquals(data,File(goReceiver.inbox,"relay-kotlin.bin").readBytes())
+                        NodiTransfer(kotlinRelay).sendText(NodiInvite.parse(toGo),"Kotlin → Go через інтернет")
+                        assertEquals("Kotlin → Go через інтернет",next("text_received").getString("text"))
+                        val file=File(temp.newFolder(),"relay-go.bin").apply{writeBytes(data)}
+                        assertEquals(0,go("send",toKotlin,file,relayToken=goToken))
+                        assertArrayEquals(data,File(kotlinReceiver.inbox,"relay-go.bin").readBytes())
+                        assertEquals(0,go("send-text",toKotlin,text="Go → Kotlin через інтернет",relayToken=goToken))
+                        assertEquals("Go → Kotlin через інтернет",kotlinReceiver.texts.poll(15,TimeUnit.SECONDS))
+                    }
+                }
+            }
+        } finally {for(pin in registered)admin.api("DELETE","/v1/admin/devices/$pin")}
     }
 
     @Test(timeout = 60000) fun manualEndpointPreservesTrustForFilesAndText() {

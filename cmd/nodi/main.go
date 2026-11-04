@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"nodi/internal/internet"
 	"nodi/internal/transfer"
 	"os"
 	"os/signal"
@@ -215,6 +216,16 @@ func receive(args []string) error {
 			}
 		}()
 	}
+	if book != nil && relayClient() != nil && os.Getenv("NODI_RELAY_PIN") == pin {
+		relay := relayClient()
+		go relay.RunReceiver(ctx, net.JoinHostPort("127.0.0.1", port), func() []string {
+			var pins []string
+			for _, p := range book.Peers() {
+				pins = append(pins, p.Fingerprint)
+			}
+			return pins
+		}, func(message string) { report(*machine, event{Type: "internet", Message: message}, "") })
+	}
 	slots := transfer.NewSlots()
 	var workers sync.WaitGroup
 	// Cancel the connections before waiting for all cleanup to finish.
@@ -286,6 +297,7 @@ func send(args []string) error {
 	if err != nil {
 		return err
 	}
+	configureInternet(&invite, *machine, *file)
 	report(*machine, event{Type: "sending"}, "Checking file and sending...")
 	if err = transfer.SendProgress(invite, *file, func(p transfer.Progress) {
 		if !*machine {
@@ -340,6 +352,7 @@ func sendText(args []string) error {
 	if err != nil {
 		return err
 	}
+	configureInternet(&invite, *machine)
 	report(*machine, event{Type: "sending_text"}, "Sending text...")
 	if err = transfer.SendText(invite, *text); err != nil {
 		return err
@@ -432,5 +445,50 @@ func pairingBroker(ctx context.Context, enabled bool) transfer.PairHandler {
 		case <-timer.C:
 			return false
 		}
+	}
+}
+
+// Per-device credentials arrive from the platform secure store, never CLI args.
+func relayClient() *internet.Client {
+	token := os.Getenv("NODI_RELAY_TOKEN")
+	if len(token) != 64 {
+		return nil
+	}
+	client := &internet.Client{Token: token}
+	if os.Getenv("NODI_RELAY_DIAGNOSTICS") == "1" {
+		client.Diagnostic = func(message string) { fmt.Fprintln(os.Stderr, message) }
+	}
+	return client
+}
+func configureInternet(invite *transfer.Invite, machine bool, files ...string) {
+	relay := relayClient()
+	if relay == nil {
+		return
+	}
+	pin := invite.Fingerprint
+	invite.Fallback = func() (net.Conn, error) {
+		if len(files) > 0 {
+			info, err := os.Stat(files[0])
+			if err != nil {
+				return nil, err
+			}
+			if info.Size() > 16*1024*1024 {
+				return nil, fmt.Errorf("Інтернет-альфа: файл має бути не більшим за 16 MiB")
+			}
+		}
+		report(machine, event{Type: "route", Message: "Інтернет"}, "")
+		ctx := context.Background()
+		if err := relay.Grant(ctx, pin); err != nil {
+			return nil, err
+		}
+		session, err := relay.Create(ctx, pin)
+		if err != nil {
+			return nil, err
+		}
+		c, err := relay.Connect(ctx, session)
+		if err != nil {
+			relay.Cancel(session)
+		}
+		return c, err
 	}
 }
