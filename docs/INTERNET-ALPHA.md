@@ -32,7 +32,10 @@ IP-адреси, VPN, попереднє спарення в одній мере
 ключем, тому встановлюються поверх попереднього.
 
 У цьому середовищі `xcrun` за замовчуванням вибирає MacOSX27.0.sdk, несумісний
-зі Swift 6.3.3. Для macOS-збірки задай сумісний SDK явно:
+зі Swift 6.3.3. Якщо `SDKROOT` не задано, `scripts/build-rooms.sh` сам вибирає
+`/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk`, коли той існує; інакше
+попереджає й використовує стандартний SDK. Ручне задання `SDKROOT` лишається
+способом перевизначити SDK:
 
 ```sh
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk bash scripts/build-rooms.sh
