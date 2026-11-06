@@ -1,10 +1,12 @@
 # Nodi relay for Cloudflare — private alpha
 
 Server implementation for cross-network transfers without entering IP addresses.
-Android and macOS integration is **not implemented yet**. This server does not
-replace local pairing and does not store files. Private-alpha deployment: https://nodi-relay.igor-shura2011faik.workers.dev
-(2026-11-03; source commit c75730f). Public HTTPS/WSS and a pinned TLS 1.3
-transport smoke test passed; actual app integration is still pending.
+Android and macOS integration is implemented for the private alpha. This server
+does not replace local pairing and does not store files. Private-alpha
+deployment: https://nodi-relay.igor-shura2011faik.workers.dev
+(2026-11-06; Worker version 9f3d2050-d8f4-4dc8-b20b-a1a984c379de, rooms build).
+Public HTTPS/WSS, pinned TLS 1.3 transport and public Go/Kotlin room
+interoperability were verified; physical-device testing is still pending.
 The original Go loopback prototype is independent and uses a different protocol.
 
 ## Run and verify locally
@@ -19,8 +21,10 @@ npm run check
 
 Tests run the actual local Workers runtime (Miniflare), not an imitation of
 Durable Objects. They cover authorization, mutual grants, private presence,
-binary duplex forwarding, one-use tickets, revocation, quotas, malformed
-frames, request-body deadlines and concurrent access during uploads, revocation during
+self-enrollment proof/replay, room approval/isolation/cancellation/rate limits,
+stored-room deletion, opt-in metrics/feedback and download counting, binary
+duplex forwarding, one-use tickets, revocation, quotas, malformed frames,
+request-body deadlines and concurrent access during uploads, revocation during
 upload, exact byte/frame/admin quotas, expiration, and TLS 1.3 with a pinned test
 certificate over WebSockets.
 The TLS test is a transport test, not an Android/Go Nodi interoperability test.
@@ -81,6 +85,18 @@ Tokens and tickets must not be placed in URLs or logs.
 | POST /v1/sessions | device | `{ "peer": "<fingerprint>" }` → 201 `{id,ticket,expiresAt}` for sender |
 | GET /v1/sessions/:id | device | WebSocket upgrade plus `X-Nodi-Ticket: <ticket>` |
 | DELETE /v1/sessions/:id | participant | cancel, invalidating both tickets and sockets |
+| POST /v1/enroll/challenge | none | `{ "id": "<pin>" }` → 201 `{nonce}`; one use, 60 s |
+| POST /v1/enroll | none | signed EC proof → 201 `{id,token}` for that certificate pin |
+| POST /v1/rooms | device | `{id,blob}` → 201; code digest + encrypted peer payload |
+| POST /v1/rooms/join | device | `{id,blob}` → 200 `{host}`; only one guest per room |
+| GET /v1/rooms/:id | participant | encrypted host/guest payload and approval state |
+| POST /v1/rooms/:id/approve | host | approve the expected guest and establish mutual grants |
+| DELETE /v1/rooms/:id | participant | cancel the room and delete its encrypted payload |
+| POST /v1/usage | device | opt-in `active`/`file`/`text` event |
+| POST /v1/feedback | device | up to 1000 characters, three per device per day |
+| GET /v1/admin/stats | admin | aggregated usage, feedback and download counts |
+| PUT /v1/admin/test-devices/:id | admin | mark test install and purge its metrics |
+| GET /download/android, /download/macos | none | counted redirect; 503 until configured |
 
 Receiver polls /v1/incoming only while receiving is enabled (for example every
 15 seconds). Presence expires after 45 seconds and means recent polling, not
@@ -110,8 +126,9 @@ On a successful WebSocket upgrade, wait for the text control message
 
 One SQLite-backed Durable Object holds a bounded private-alpha registry:
 64 devices, 16 concurrent sessions, at most 2 sessions involving each device,
-120 authenticated API requests/device/minute, 120 authenticated admin requests
-per 60-second window, 30-second rendezvous timeout,
+32 pending rooms, at most 2 rooms per host, 128 outstanding enrollment challenges,
+120 authenticated API requests/device/minute (room joins included), 120
+authenticated admin requests per 60-second window, 30-second rendezvous timeout,
 10-minute paired lifetime, 64 MiB combined tunnel bytes and 4096 frames/session
 (including acknowledgements). The content limit includes TLS overhead, so the
 maximum actual file is smaller. These are alpha safety limits, not product limits.
@@ -163,3 +180,60 @@ secure enrollment UI; physical devices on different networks; interrupt/restart
 and load tests on Cloudflare; independent security review. No published app can
 use this API yet. Public self-service enrollment and initial remote pairing are
 intentionally outside this private-alpha server milestone.
+
+### Rooms and private insights (client integration)
+
+Self-enrollment uses a one-minute, one-use server challenge signed by the device's
+existing EC certificate key. The certificate digest must equal its Nodi pin.
+Revoked device identities cannot self-enroll again; explicit admin registration
+can restore them. Verification uses the supported [Workers Node crypto API](https://developers.cloudflare.com/workers/runtime-apis/nodejs/crypto/).
+
+Room codes carry 80 random bits (16 base32 characters), expire after five minutes,
+and are generated on the client. Only the code digest and AES-256-GCM encrypted
+peer data reach the server. The host approves the expected guest before the
+server establishes mutual grants or discloses the encrypted host payload.
+The shared transfer capability stays inside the encrypted payload. The existing
+pinned inner TLS still verifies the peer on every transfer. A code is a secret;
+share it privately with the intended participant.
+
+`POST /v1/usage` is opt-in and accepts only active/file/text events and platform.
+`POST /v1/feedback` accepts at most 1000 characters and three submissions per
+registered device per day. `GET /v1/admin/stats` requires the admin bearer token.
+The report omits device IDs, content of transfers, filenames and network addresses.
+Stored per-device daily metrics are pseudonymous, not anonymous. Thirty-day
+retention is maintained by scheduled pruning. Test installations are excluded.
+`PUT /v1/admin/test-devices/:pin` permanently marks existing operator devices as
+tests and removes their previous usage/feedback records.
+
+The owner runs `node scripts/internet-report.mjs` from the repository (Node 22+).
+It reads the ignored local admin credential and writes `build/private-report/index.html`
+with mode 0600. Neither the token nor a public dashboard is created.
+
+Download request counting is available at `/download/android` and `/download/macos`
+only after `DOWNLOAD_ANDROID_URL` / `DOWNLOAD_MACOS_URL` point to published assets
+under `https://github.com/NODEPY/nodi/releases/download/`. Until configured, the
+routes return 503 and do not count anything. `/download/test/android` and
+`/download/test/macos` bypass counting for owner test downloads. These are counts
+of redirects, not completed downloads or unique people. Direct GitHub downloads
+cannot be attributed to, or filtered by, the owner's physical devices.
+
+After publishing the APK and ZIP in a GitHub release, configure both values from
+`server/cloudflare` (replace `<tag>` with the published release tag):
+
+```sh
+printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/nodi-android-rooms.apk' \
+  | npx wrangler secret put DOWNLOAD_ANDROID_URL
+printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/nodi-macos-rooms.zip' \
+  | npx wrangler secret put DOWNLOAD_MACOS_URL
+```
+
+Wrangler uploads each value as a Worker secret and creates a new version; no
+`wrangler deploy` is needed only for these two values. Run `npm run check` first
+and `npx wrangler deploy` only if code or configuration also changed. Verify with
+`curl -sI https://nodi-relay.igor-shura2011faik.workers.dev/download/android`
+(expect `302` and a `Location` under the release URL) and
+`.../download/test/android` (expect `302` without incrementing the counter).
+
+Capacity remains private-alpha: 64 registered identities, 32 pending rooms,
+16 relay sessions total. Public enrollment is limited globally and per source
+IP per minute. This is not a claim of readiness for unrestricted public scale.

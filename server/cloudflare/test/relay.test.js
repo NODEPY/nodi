@@ -1,15 +1,19 @@
+import {execFileSync} from 'node:child_process';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join as pathJoin} from 'node:path';
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {Miniflare} from 'miniflare';
 import {readFile} from 'node:fs/promises';
-import {randomBytes, X509Certificate} from 'node:crypto';
+import {randomBytes, X509Certificate, sign, createHash} from 'node:crypto';
 import {Duplex} from 'node:stream';
 import tls from 'node:tls';
 import {once} from 'node:events';
 const admin='a'.repeat(64), fresh=()=>randomBytes(32).toString('hex');
 let mf, worker;
 before(async()=>{
- mf=new Miniflare({modules:true,script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin}});
+ mf=new Miniflare({modules:true,scriptPath:decodeURIComponent(new URL('../src/worker.js',import.meta.url).pathname),compatibilityFlags:['nodejs_compat'],script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin}});
  worker=await mf.getWorker();
 });
 after(async()=>{await mf.dispose();});
@@ -231,11 +235,91 @@ for (const limit of ['bytes','frames']) test(`exact ${limit} limit forwards no e
 });
 
 test('admin quota admits 120 requests and rejects the next',async()=>{
- const isolated=new Miniflare({modules:true,script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin}});
+ const isolated=new Miniflare({modules:true,scriptPath:decodeURIComponent(new URL('../src/worker.js',import.meta.url).pathname),compatibilityFlags:['nodejs_compat'],script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin}});
  try {
   const request=token=>isolated.dispatchFetch('https://relay.test/v1/admin/unknown',{headers:{Authorization:`Bearer ${token}`}});
   assert.equal((await request(fresh())).status,401);
   for(let i=0;i<120;i++)assert.equal((await request(admin)).status,404);
   assert.equal((await request(admin)).status,429);
  } finally {await isolated.dispose();}
+});
+
+
+test('self enrollment proves certificate ownership and rejects replay',async()=>{
+ const dir=mkdtempSync(pathJoin(tmpdir(),'nodi-enroll-'));
+ let cert,key;
+ try {
+   execFileSync('openssl',['req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:prime256v1','-nodes','-keyout',pathJoin(dir,'key.pem'),'-out',pathJoin(dir,'cert.pem'),'-subj','/CN=Nodi test','-days','1'],{stdio:'ignore'});
+   cert=new X509Certificate(await readFile(pathJoin(dir,'cert.pem')));key=await readFile(pathJoin(dir,'key.pem'));
+ }finally{rmSync(dir,{recursive:true,force:true});}
+ const id=createHash('sha256').update(cert.raw).digest('hex');
+ let nonce=(await (await call('/v1/enroll/challenge',null,'POST',{id})).json()).nonce;
+ const payload={id,nonce,certificate:cert.raw.toString('base64'),signature:sign('sha256',Buffer.from('nodi-enroll-v1\n'+id+'\n'+nonce),key).toString('base64'),testInstall:true};
+ let response=await call('/v1/enroll',null,'POST',payload);assert.equal(response.status,201);
+ const enrolled=await response.json();assert.equal((await call('/v1/incoming',enrolled.token)).status,200);
+ assert.equal((await call('/v1/enroll',null,'POST',payload)).status,401);
+ const bad=fresh();nonce=(await (await call('/v1/enroll/challenge',null,'POST',{id:bad})).json()).nonce;
+ assert.equal((await call('/v1/enroll',null,'POST',{...payload,id:bad,nonce})).status,401);
+ await call('/v1/admin/devices/'+id,admin,'DELETE');
+ assert.equal((await call('/v1/enroll',null,'POST',payload)).status,403);
+});
+test('rooms require owner approval and isolate encrypted payloads',async()=>{
+ const a=await device(),b=await device(),c=await device(),id=fresh(),blob=Buffer.alloc(100,5).toString('base64');
+ assert.equal((await call('/v1/rooms',a.token,'POST',{id,blob})).status,201);
+ assert.equal((await call('/v1/rooms/'+id,c.token)).status,404);
+ assert.equal((await call('/v1/rooms/join',b.token,'POST',{id,blob})).status,200);
+ assert.equal((await call('/v1/rooms/join',c.token,'POST',{id,blob})).status,404);
+ assert.equal((await (await call('/v1/rooms/'+id,b.token)).json()).blob,'');
+ assert.equal((await call('/v1/rooms/'+id+'/approve',b.token,'POST',{})).status,405);
+ assert.equal((await call('/v1/rooms/'+id+'/approve',a.token,'POST',{})).status,200);
+ assert.equal((await (await call('/v1/rooms/'+id,b.token)).json()).blob,blob);
+ assert.equal((await call('/v1/sessions',a.token,'POST',{peer:b.id})).status,201);
+ // A consumed room is still isolated: a third device cannot read or reuse it.
+ assert.equal((await call('/v1/rooms/'+id,c.token)).status,404);
+ assert.equal((await call('/v1/rooms/join',c.token,'POST',{id,blob})).status,404);
+ assert.equal((await call('/v1/rooms/join',b.token,'POST',{id,blob})).status,404);
+ await call('/v1/rooms/'+id,b.token,'DELETE');
+ assert.equal((await call('/v1/rooms/'+id,a.token)).status,404);
+ assert.equal((await call('/v1/rooms/join',c.token,'POST',{id,blob})).status,404);
+ // Cancelling before approval invalidates the code immediately.
+ const cancelled=fresh();
+ assert.equal((await call('/v1/rooms',a.token,'POST',{id:cancelled,blob})).status,201);
+ assert.equal((await call('/v1/rooms/join',b.token,'POST',{id:cancelled,blob})).status,200);
+ await call('/v1/rooms/'+cancelled,a.token,'DELETE');
+ assert.equal((await call('/v1/rooms/'+cancelled,b.token)).status,404);
+ assert.equal((await call('/v1/rooms/join',c.token,'POST',{id:cancelled,blob})).status,404);
+});
+test('room join attempts share the per-device rate limit',async()=>{
+ const a=await device(),id=fresh(),blob=Buffer.alloc(100,5).toString('base64');
+ const statuses=[];
+ for(let i=0;i<121;i++)statuses.push((await call('/v1/rooms/join',a.token,'POST',{id,blob})).status);
+ assert.equal(statuses.filter(status=>status===404).length,120);
+ assert.equal(statuses.at(-1),429);
+});
+test('statistics are admin-only, require consent and exclude test installs',async()=>{
+ const a=await device(),b=await device();
+ assert.equal((await call('/v1/admin/stats',a.token)).status,401);
+ assert.equal((await call('/v1/usage',a.token,'POST',{event:'active',platform:'android'})).status,400);
+ assert.equal((await call('/v1/usage',a.token,'POST',{event:'file',platform:'android',consent:true})).status,200);
+ const before=await (await call('/v1/admin/stats',admin)).json();
+ assert.equal((await call('/v1/admin/test-devices/'+b.id,admin,'PUT')).status,200);
+ await call('/v1/usage',b.token,'POST',{event:'file',platform:'macos',consent:true});
+ await call('/v1/feedback',b.token,'POST',{text:'test feedback'});
+ assert.deepEqual(await (await call('/v1/admin/stats',admin)).json(),before);
+ await call('/v1/feedback',a.token,'POST',{text:'Helpful feedback'});
+ const after=await (await call('/v1/admin/stats',admin)).json();assert.equal(after.feedback.at(-1).text,'Helpful feedback');
+ assert.ok(!JSON.stringify(after).includes(a.id));assert.ok(!JSON.stringify(after).includes(a.token));
+});
+
+test('download redirects count separately and test links are excluded',async()=>{
+ const isolated=new Miniflare({modules:true,scriptPath:decodeURIComponent(new URL('../src/worker.js',import.meta.url).pathname),compatibilityFlags:['nodejs_compat'],script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin,DOWNLOAD_ANDROID_URL:'https://github.com/NODEPY/nodi/releases/download/test/app.apk'}});
+ try {
+  const get=path=>isolated.dispatchFetch('https://relay.test'+path,{redirect:'manual'});
+  assert.equal((await get('/download/android')).status,302);
+  assert.equal((await get('/download/test/android')).status,302);
+  assert.equal((await get('/download/macos')).status,503);
+  assert.equal((await get('/v1/admin/stats')).status,401);
+  const stats=await (await isolated.dispatchFetch('https://relay.test/v1/admin/stats',{headers:{Authorization:'Bearer '+admin}})).json();
+  assert.deepEqual(Object.values(stats.downloadRequests),[{android:1,macos:0}]);
+ }finally{await isolated.dispose();}
 });

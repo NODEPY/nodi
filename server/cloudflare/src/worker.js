@@ -1,3 +1,5 @@
+import { X509Certificate, verify, createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 // Private-alpha relay. Device credentials are provisioned by the operator.
 // TLS with the existing device certificate pin MUST run inside binary frames.
 const MAX_DEVICES = 64, MAX_SESSIONS = 16, MAX_FRAME = 64 * 1024;
@@ -8,7 +10,7 @@ const hash = async s => hex(await crypto.subtle.digest('SHA-256', new TextEncode
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control': 'no-store'}});
 const fail = (status, error) => json({error}, status);
 const idOK = s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
-async function body(request) {
+async function body(request, max = 1024) {
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw Error('body');
   const reader = request.body?.getReader(); if (!reader) throw Error('body');
   let chunks = [], size = 0;
@@ -21,7 +23,7 @@ async function body(request) {
       })]);
     } finally { clearTimeout(timeout); }
     const {value, done} = part; if (done) break;
-    size += value.length; if (size > 1024) { await reader.cancel(); throw Error('body'); } chunks.push(value); }
+    size += value.length; if (size > max) { await reader.cancel(); throw Error('body'); } chunks.push(value); }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) {bytes.set(chunk, offset); offset += chunk.length;}
   const result = JSON.parse(new TextDecoder().decode(bytes));
@@ -41,12 +43,41 @@ export default {
 
 export class RelayHub {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
-  async load() {return await this.ctx.storage.get('state') || {devices:{}, sessions:{}};}
+  async load() {
+    // Cache survives requests in this object; persist bounded records separately
+    // rather than growing one value beyond Durable Object's value-size limit.
+    if(!this.persisted) {
+      this.persisted=new Map();
+      const legacy=await this.ctx.storage.get('state');
+      if(legacy?.format!==2) {
+        this.legacy=legacy||{devices:{},sessions:{}};
+      } else {
+        let startAfter;
+        for(;;){const page=await this.ctx.storage.list({prefix:'v2:',limit:1000,...(startAfter?{startAfter}:{})});for(const [k,v]of page)this.persisted.set(k,v);if(page.size<1000)break;startAfter=[...page.keys()].at(-1);}
+      }
+    }
+    let s=this.legacy?structuredClone(this.legacy):{devices:{},sessions:{}};
+    if(!this.legacy)for(const [key,value]of this.persisted){const [,group,id]=key.split(':');if(group==='meta')s[id]=structuredClone(value);else{(s[group]||={})[id]=structuredClone(value);}}
+    if(!Array.isArray(s.feedback))s.feedback=Object.values(s.feedback||{}).sort((a,b)=>a.created-b.created);
+    s.rooms ||= {};s.challenges ||= {};s.metrics ||= {};s.feedback ||= [];s.downloads ||= {};s.revoked ||= {};
+    return s;
+  }
   async save(s) {
-    await this.ctx.storage.put('state', s);
-    const deadlines = Object.values(s.sessions).map(x => x.deadline);
-    if (deadlines.length) await this.ctx.storage.setAlarm(Math.min(...deadlines));
-    else await this.ctx.storage.deleteAlarm();
+    const next=new Map();
+    for(const group of ['devices','sessions','rooms','challenges','metrics','downloads','revoked'])for(const [id,value]of Object.entries(s[group]||{}))next.set('v2:'+group+':'+id,value);
+    for(const f of s.feedback){f.id ||= secret();f.created ||= Date.now();next.set('v2:feedback:'+f.id,f);}
+    for(const key of ['adminRate','publicRate'])if(s[key])next.set('v2:meta:'+key,s[key]);
+    const changed=[...next].filter(([k,v])=>JSON.stringify(this.persisted.get(k))!==JSON.stringify(v));
+    const removed=[...this.persisted.keys()].filter(k=>!next.has(k));
+    await this.ctx.storage.transaction(async tx=>{
+      for(let i=0;i<changed.length;i+=128)await tx.put(Object.fromEntries(changed.slice(i,i+128)));
+      for(let i=0;i<removed.length;i+=128)await tx.delete(removed.slice(i,i+128));
+      if(this.legacy){await tx.put('legacy-v1-backup',this.legacy);await tx.put('state',{format:2});}
+    });
+    this.persisted=new Map([...next].map(([k,v])=>[k,structuredClone(v)]));this.legacy=null;
+    const deadlines=[...Object.values(s.sessions),...Object.values(s.rooms),...Object.values(s.challenges)].map(x=>x.deadline);
+    if(Object.keys(s.metrics).length||Object.keys(s.downloads).length||s.feedback.length)deadlines.push((Math.floor(Date.now()/86400000)+1)*86400000);
+    if(deadlines.length)await this.ctx.storage.setAlarm(Math.min(...deadlines));else await this.ctx.storage.deleteAlarm();
   }
   sockets(id) { return this.ctx.getWebSockets(id); }
   send(ws, data) {try {ws.send(data);return true;} catch {return false;}}
@@ -54,26 +85,65 @@ export class RelayHub {
     delete s.sessions[id];
     for (const ws of this.sockets(id)) {try {ws.close(1000, reason);} catch { /* already closed */ }}
   }
-  prune(s) {for (const [id, room] of Object.entries(s.sessions)) if (room.deadline <= Date.now()) this.end(s,id,'expired');}
+  prune(s) {
+    for (const collection of [s.rooms,s.challenges]) for (const [id,item] of Object.entries(collection)) if(item.deadline <= Date.now()) delete collection[id];
+    const oldest = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+    for (const day of Object.keys(s.downloads)) if(day<oldest) delete s.downloads[day];
+    for (const day of Object.keys(s.metrics)) if(day<oldest) delete s.metrics[day];
+    s.feedback = s.feedback.filter(x=>x.day>=oldest);
+    for (const [id, room] of Object.entries(s.sessions)) if (room.deadline <= Date.now()) this.end(s,id,'expired');}
   // Authenticate and charge the quota before reading a body. Then release the
   // object lock while the client uploads; revalidate credentials before mutation.
   async fetch(request) {
     const admission = await this.ctx.blockConcurrencyWhile(async () => {
       const s = await this.load(); this.prune(s);
-      const auth = await this.authorize(request, s, true);
+      const auth = (['/v1/enroll/challenge','/v1/enroll'].includes(new URL(request.url).pathname)||/^\/download\/(test\/)?(android|macos)$/.test(new URL(request.url).pathname)) ? await this.publicAdmission(request,s) : await this.authorize(request, s, true);
       await this.save(s); return auth;
     });
     if (admission instanceof Response) return admission;
     const path = new URL(request.url).pathname;
     let payload;
-    if (request.method === 'POST' && ['/v1/admin/devices', '/v1/sessions'].includes(path)) {
-      try { payload = await body(request); } catch { return fail(400, 'invalid_request'); }
+    if (request.method === 'POST') {
+      try { payload = await body(request, ['/v1/enroll','/v1/rooms','/v1/rooms/join','/v1/feedback'].includes(path) ? 4096 : 1024); } catch { return fail(400, 'invalid_request'); }
     }
     return this.ctx.blockConcurrencyWhile(async () => {
       const s = await this.load(); this.prune(s);
       const result = await this.route(request, s, payload);
       await this.save(s); return result;
     });
+  }
+  async publicAdmission(request,s) {
+    if(request.method!=='POST' && !(request.method==='GET' && new URL(request.url).pathname.startsWith('/download/')))return fail(405,'method_not_allowed');
+    const minute=Math.floor(Date.now()/60000);
+    if(s.publicRate?.minute!==minute)s.publicRate={minute,count:0,ips:{}};
+    const ip=await hash(request.headers.get('CF-Connecting-IP') || 'local');
+    if(++s.publicRate.count>100 || (s.publicRate.ips[ip]=(s.publicRate.ips[ip]||0)+1)>12)return fail(429,'rate_limit');
+    return {public:true};
+  }
+  async enroll(request,s,payload) {
+    const path=new URL(request.url).pathname;
+    if(path==='/v1/enroll/challenge') {
+      if(!idOK(payload?.id))return fail(400,'invalid_device');
+      if(Object.keys(s.challenges).length>=128)return fail(429,'challenge_limit');
+      const nonce=secret();s.challenges[nonce]={id:payload.id,deadline:Date.now()+60000};
+      return json({nonce},201);
+    }
+    const {id,nonce,certificate,signature,testInstall}=payload||{};
+    if(s.revoked[id])return fail(403,'device_revoked');
+    const challenge=s.challenges[nonce];
+    if(!challenge || challenge.id!==id)return fail(401,'invalid_proof');
+    delete s.challenges[nonce];
+    try {
+      if(typeof certificate!=='string'||typeof signature!=='string'||certificate.length>2400||signature.length>200)throw Error();
+      const cert=new X509Certificate(Buffer.from(certificate,'base64'));
+      if(createHash('sha256').update(cert.raw).digest('hex')!==id || cert.publicKey.asymmetricKeyType!=='ec' ||
+        !verify('sha256',Buffer.from('nodi-enroll-v1\n'+id+'\n'+nonce),cert.publicKey,Buffer.from(signature,'base64')))throw Error();
+    }catch{return fail(401,'invalid_proof');}
+    if(!s.devices[id]&&Object.keys(s.devices).length>=MAX_DEVICES)return fail(429,'device_limit');
+    const token=secret(),old=s.devices[id];
+    s.devices[id]={...old,hash:await hash(token),peers:old?.peers||[],minute:0,requests:0,test:old?.test===true||testInstall===true};
+    for(const [sid,r] of Object.entries(s.sessions))if([r.sender,r.receiver].includes(id))this.end(s,sid,'credential_changed');
+    return json({id,token},201);
   }
   async authorize(request, s, charge) {
     const path = new URL(request.url).pathname;
@@ -101,20 +171,41 @@ export class RelayHub {
   }
   async route(request, s, payload) {
     const path = new URL(request.url).pathname, method = request.method;
+    const download=path.match(/^\/download\/(test\/)?(android|macos)$/);
+    if(download&&method==='GET') {
+      const target=this.env[download[2]==='android'?'DOWNLOAD_ANDROID_URL':'DOWNLOAD_MACOS_URL'];
+      if(typeof target!=='string'||!target.startsWith('https://github.com/NODEPY/nodi/releases/download/'))return fail(503,'download_not_published');
+      if(!download[1]){const day=new Date().toISOString().slice(0,10);const d=(s.downloads[day]||={android:0,macos:0});d[download[2]]++;}
+      return new Response(null,{status:302,headers:{Location:target,'Cache-Control':'no-store'}});
+    }
+    if(['/v1/enroll/challenge','/v1/enroll'].includes(path))return this.enroll(request,s,payload);
     const auth = await this.authorize(request, s, false);
     if (auth instanceof Response) return auth;
     if (auth.admin) {
+      if(path==='/v1/admin/stats'&&method==='GET') {
+        const days=Object.entries(s.metrics).sort().map(([day,devices])=>{
+          const values=Object.entries(devices).filter(([id])=>!s.devices[id]?.test).map(([,v])=>v);
+          return {day,activeInstalls:values.length,files:values.reduce((n,v)=>n+v.files,0),texts:values.reduce((n,v)=>n+v.texts,0),platforms:values.reduce((r,v)=>(r[v.platform]=(r[v.platform]||0)+1,r),{})};
+        });
+        return json({downloadRequests:s.downloads,days,feedback:s.feedback.filter(x=>!s.devices[x.device]?.test).map(({device,id,created,...x})=>x),retentionDays:30});
+      }
+      const testPath=path.match(/^\/v1\/admin\/test-devices\/([a-f0-9]{64})$/);
+      if(testPath&&method==='PUT') {if(!s.devices[testPath[1]])return fail(404,'not_found');s.devices[testPath[1]].test=true;for(const day of Object.values(s.metrics))delete day[testPath[1]];s.feedback=s.feedback.filter(x=>x.device!==testPath[1]);return json({ok:true});}
       if (path === '/v1/admin/devices' && method === 'POST') {
         const {id} = payload;
         if (!idOK(id)) return fail(400,'invalid_device');
         if (s.devices[id]) return fail(409,'already_registered');
         if (Object.keys(s.devices).length >= MAX_DEVICES) return fail(429,'device_limit');
+        delete s.revoked[id];
         const token = secret(); s.devices[id] = {hash:await hash(token), peers:[], minute:0, requests:0};
         return json({id, token},201);
       }
       const match = path.match(/^\/v1\/admin\/devices\/([a-f0-9]{64})$/);
       if (match && method === 'DELETE') {
+        if(s.devices[match[1]])s.revoked[match[1]]=true;
         delete s.devices[match[1]];
+        for(const day of Object.values(s.metrics))delete day[match[1]];
+        s.feedback=s.feedback.filter(x=>x.device!==match[1]);
         for (const d of Object.values(s.devices)) d.peers = d.peers.filter(p => p !== match[1]);
         for (const [id,r] of Object.entries(s.sessions)) if (r.sender===match[1] || r.receiver===match[1]) this.end(s,id,'revoked');
         return json({ok:true});
@@ -122,6 +213,48 @@ export class RelayHub {
       return fail(404,'not_found');
     }
     const {me, device} = auth;
+    if(path==='/v1/usage'&&method==='POST') {
+      if(device.test||payload?.testInstall===true){device.test=true;return json({ok:true});}
+      if(payload?.consent!==true||!['android','macos'].includes(payload.platform)||!['active','file','text'].includes(payload.event))return fail(400,'invalid_usage');
+      const day=new Date().toISOString().slice(0,10),daily=(s.metrics[day]||={});
+      const v=(daily[me]||={platform:payload.platform,files:0,texts:0});
+      if(payload.event==='file')v.files++;if(payload.event==='text')v.texts++;
+      return json({ok:true});
+    }
+    if(path==='/v1/feedback'&&method==='POST') {
+      if(typeof payload?.text!=='string'||payload.text.trim().length<1||payload.text.length>1000)return fail(400,'invalid_feedback');
+      const day=new Date().toISOString().slice(0,10);
+      if(s.feedback.filter(x=>x.device===me&&x.day===day).length>=3||s.feedback.length>=300)return fail(429,'feedback_limit');
+      if(!device.test)s.feedback.push({device:me,day,text:payload.text.trim()});
+      return json({ok:true});
+    }
+    // Only encrypted pairing payloads are stored; the room code never reaches us.
+    const blobOK=x=>typeof x==='string'&&x.length>=40&&x.length<=3000&&/^[A-Za-z0-9+/=]+$/.test(x);
+    if(path==='/v1/rooms'&&method==='POST') {
+      if(!idOK(payload?.id)||!blobOK(payload.blob))return fail(400,'invalid_room');
+      if(s.rooms[payload.id])return fail(409,'room_exists');
+      if(Object.keys(s.rooms).length>=32||Object.values(s.rooms).filter(r=>r.host===me).length>=2)return fail(429,'room_limit');
+      s.rooms[payload.id]={host:me,blob:payload.blob,deadline:Date.now()+300000,approved:false};
+      return json({id:payload.id},201);
+    }
+    if(path==='/v1/rooms/join'&&method==='POST') {
+      const r=s.rooms[payload?.id];
+      if(!r||r.host===me||r.guest||!blobOK(payload.blob))return fail(404,'room_unavailable');
+      r.guest=me;r.guestBlob=payload.blob;return json({host:r.host});
+    }
+    const roomPath=path.match(/^\/v1\/rooms\/([a-f0-9]{64})(\/approve)?$/);
+    if(roomPath) {
+      const r=s.rooms[roomPath[1]];
+      if(!r||![r.host,r.guest].includes(me))return fail(404,'room_unavailable');
+      if(method==='DELETE'){delete s.rooms[roomPath[1]];return json({ok:true});}
+      if(method==='POST'&&roomPath[2]&&me===r.host&&r.guest) {
+        if(!s.devices[r.guest])return fail(404,'peer_unavailable');
+        for(const [a,b] of [[r.host,r.guest],[r.guest,r.host]])if(!s.devices[a].peers.includes(b))s.devices[a].peers.push(b);
+        r.approved=true;return json({ok:true});
+      }
+      if(method==='GET'&&!roomPath[2])return json(me===r.host?{guest:r.guest||'',blob:r.guestBlob||'',approved:r.approved}:{host:r.host,approved:r.approved,blob:r.approved?r.blob:''});
+      return fail(405,'method_not_allowed');
+    }
     const peerPath = path.match(/^\/v1\/peers\/([a-f0-9]{64})$/);
     if (peerPath && ['PUT','DELETE'].includes(method)) {
       const peer = peerPath[1];
