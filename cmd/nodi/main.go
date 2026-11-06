@@ -163,6 +163,23 @@ func receive(args []string) error {
 	}
 	human.WriteString("\nWaiting for files...")
 	report(*machine, event{Type: "ready", Path: inbox, Invites: invites}, human.String())
+	var internetMu sync.Mutex
+	var roomCancelMu sync.Mutex
+	var roomCancel context.CancelFunc
+	var currentInternet *internet.Client
+	startInternet := func(client *internet.Client) {
+		currentInternet = client
+		go client.RunReceiver(ctx, net.JoinHostPort("127.0.0.1", port), func() []string {
+			var pins []string
+			for _, p := range book.Peers() {
+				pins = append(pins, p.Fingerprint)
+			}
+			return pins
+		}, func(message string) { report(true, event{Type: "internet", Message: message}, "") })
+	}
+	if book != nil && relayClient() != nil && os.Getenv("NODI_RELAY_PIN") == pin {
+		startInternet(relayClient())
+	}
 	approve := pairingBroker(ctx, *machine && *interactive && book == nil)
 	if book != nil {
 		wifi := &wifiBroker{}
@@ -184,6 +201,59 @@ func receive(args []string) error {
 					continue
 				}
 				switch command.Type {
+				case "room_cancel":
+					roomCancelMu.Lock()
+					if roomCancel != nil {
+						roomCancel()
+					}
+					roomCancelMu.Unlock()
+				case "internet_enable", "room_host", "room_join":
+					kind, code := command.Type, command.Address
+					go func() {
+						if !internetMu.TryLock() {
+							report(true, event{Type: "error", Message: "Підключення вже виконується"}, "")
+							return
+						}
+						defer internetMu.Unlock()
+						roomCtx, cancelRoom := context.WithCancel(ctx)
+						roomCancelMu.Lock()
+						roomCancel = cancelRoom
+						roomCancelMu.Unlock()
+						defer func() {
+							cancelRoom()
+							roomCancelMu.Lock()
+							roomCancel = nil
+							roomCancelMu.Unlock()
+							report(true, event{Type: "room_closed"}, "")
+						}()
+						if currentInternet == nil {
+							client, activation, e := internet.Enroll(roomCtx, cert, os.Getenv("NODI_TEST_INSTALL") == "1")
+							if e != nil {
+								report(true, event{Type: "error", Message: e.Error()}, "")
+								return
+							}
+							startInternet(client)
+							report(true, event{Type: "internet_activation", Code: activation}, "")
+						}
+						own := internet.RoomPeer{Fingerprint: pin, Name: "Nodi Mac"}
+						save := func(p internet.RoomPeer) error {
+							return book.RememberInternet(transfer.Peer{Name: p.Name, Address: "192.0.2.1:1", Fingerprint: p.Fingerprint, Token: p.Token})
+						}
+						var e error
+						if kind == "room_host" {
+							e = currentInternet.Host(roomCtx, own, func(code string) { report(true, event{Type: "room_code", Code: code}, "") }, func(p internet.RoomPeer, code string) bool {
+								return wifi.approve(roomCtx, transfer.PairRequest{ID: "internet-room", Name: p.Name, Compare: code})
+							}, save)
+						}
+						if kind == "room_join" {
+							e = currentInternet.Join(roomCtx, code, own, save)
+						}
+						if e != nil {
+							report(true, event{Type: "error", Message: e.Error()}, "")
+						} else if kind != "internet_enable" {
+							report(true, event{Type: "room_connected", Message: "Пристрої підключено через інтернет"}, "")
+						}
+					}()
 				case "wifi_select":
 					book.SelectWiFi(command.Pin)
 				case "wifi_request":
@@ -216,16 +286,7 @@ func receive(args []string) error {
 			}
 		}()
 	}
-	if book != nil && relayClient() != nil && os.Getenv("NODI_RELAY_PIN") == pin {
-		relay := relayClient()
-		go relay.RunReceiver(ctx, net.JoinHostPort("127.0.0.1", port), func() []string {
-			var pins []string
-			for _, p := range book.Peers() {
-				pins = append(pins, p.Fingerprint)
-			}
-			return pins
-		}, func(message string) { report(*machine, event{Type: "internet", Message: message}, "") })
-	}
+
 	slots := transfer.NewSlots()
 	var workers sync.WaitGroup
 	// Cancel the connections before waiting for all cleanup to finish.
