@@ -120,6 +120,7 @@ final class CoreTask {
         var environment=ProcessInfo.processInfo.environment
         environment.removeValue(forKey:"NODI_RELAY_TOKEN");environment.removeValue(forKey:"NODI_RELAY_PIN")
         if let relay=NodiInternet.load(){environment["NODI_RELAY_TOKEN"]=relay["token"];environment["NODI_RELAY_PIN"]=relay["fingerprint"]}
+        environment["NODI_TEST_INSTALL"] = (Bundle.main.object(forInfoDictionaryKey:"NodiTestInstall") as? Bool ?? true) ? "1" : "0"
         process.environment=environment
         process.executableURL = executable
         process.arguments = arguments
@@ -278,6 +279,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSendPin: String?
     private var pendingQR = false
     private var restartForInternet = false
+    private var pendingInternetCommand: (String,String?)? = nil
+    private var roomActive=false
     private var stopping = false
     private var sendConfirmed = false
     private var sendCancelled = false
@@ -416,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsButton=NodiButton(title:"Параметри",target:self,action:#selector(settings));settingsButton.bezelStyle = .rounded
         self.symbol(settingsButton,"gearshape");settingsButton.toolTip=NodiL("Параметри");settingsButton.setAccessibilityLabel(NodiL("Параметри"));settingsButton.title=""
         settingsButton.widthAnchor.constraint(equalToConstant:36).isActive=true
-        let header=self.row([mark,title,NSView(),settingsButton])
+        let feedback=NodiButton(title:"Відгук",target:self,action:#selector(feedbackSettings));feedback.bezelStyle = .rounded
+        let header=self.row([mark,title,NSView(),feedback,settingsButton])
         let transfers=NSStackView(views:[send,receive]);transfers.orientation = .horizontal;transfers.alignment = .top;transfers.distribution = .fillEqually;transfers.spacing=16
         send.heightAnchor.constraint(equalTo:receive.heightAnchor).isActive=true
         let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
@@ -493,21 +497,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let value = self.preferences.string(forKey: "nodi.endpoint." + pin) else { return nil }
         return NodiEndpoint.normalize(value)
     }
+    @objc private func feedbackSettings() {
+        let alert=NSAlert();alert.messageText="Відгук і приватність"
+        alert.informativeText="Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів." + (NodiInternet.testInstall ? " Ця тестова збірка не враховується." : "")
+        let input=NSTextField(frame:NSRect(x:0,y:36,width:380,height:60));input.placeholderString="Відгук автору (до 1000 символів)"
+        let consent=NSButton(checkboxWithTitle:"Ділитися статистикою використання",target:nil,action:nil);consent.frame=NSRect(x:0,y:0,width:380,height:28);consent.state=UserDefaults.standard.bool(forKey:"nodi.usageConsent") ? .on : .off
+        let view=NSView(frame:NSRect(x:0,y:0,width:380,height:100));view.addSubview(input);view.addSubview(consent);alert.accessoryView=view
+        alert.addButton(withTitle:"Надіслати відгук");alert.addButton(withTitle:"Зберегти");alert.addButton(withTitle:"Закрити")
+        let result=alert.runModal();guard result != .alertThirdButtonReturn else{return}
+        UserDefaults.standard.set(consent.state == .on,forKey:"nodi.usageConsent");NodiInternet.usage("active")
+        if result == .alertFirstButtonReturn {
+            let text=input.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
+            guard !text.isEmpty && text.count<=1000 else{self.log("Відгук має містити від 1 до 1000 символів");return}
+            guard NodiInternet.load() != nil else{self.log("Спочатку підключи Інтернет у Nodi");return}
+            NodiInternet.request("/v1/feedback",payload:["text":text]){ok in DispatchQueue.main.async{self.log(ok ? "Відгук надіслано" : "Не вдалося надіслати відгук")}}
+        }
+    }
     @objc private func internetSettings() {
+        if self.roomActive {
+            let alert=NSAlert();alert.messageText="Кімната активна";alert.informativeText="Скасувати очікування підключення?";alert.addButton(withTitle:"Залишити");alert.addButton(withTitle:"Скасувати кімнату")
+            if alert.runModal() == .alertSecondButtonReturn {self.pendingInternetCommand=nil;self.receiver?.command("room_cancel");self.roomActive=false};return
+        }
         guard self.sender == nil && !self.stopping else{return}
-        let alert=NSAlert();alert.messageText="Інтернет Nodi"
-        alert.informativeText=NodiInternet.load()==nil ? "Встав код активації цього пристрою для приватної альфи. IP-адреси й VPN не потрібні. Спочатку спаруй пристрої через QR або Wi-Fi." : "Інтернет увімкнено. Якщо локальне з’єднання недоступне, Nodi автоматично використає Cloudflare. Ліміт альфи — до 16 MiB на файл."
-        let input=NSSecureTextField(frame:NSRect(x:0,y:0,width:360,height:28));input.placeholderString="Код активації"
-        alert.accessoryView=input;alert.addButton(withTitle:"Активувати");alert.addButton(withTitle:"Закрити")
-        if NodiInternet.load() != nil {alert.addButton(withTitle:"Вимкнути")}
+        let alert=NSAlert();alert.messageText="Інтернет · кімната"
+        alert.informativeText="Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл."
+        let input=NSTextField(frame:NSRect(x:0,y:0,width:360,height:28));input.placeholderString="XXXX-XXXX-XXXX-XXXX"
+        alert.accessoryView=input;alert.addButton(withTitle:"Створити кімнату");alert.addButton(withTitle:"Приєднатися");alert.addButton(withTitle:"Закрити")
         let result=alert.runModal()
-        do {
-            if result == .alertFirstButtonReturn {try NodiInternet.activate(input.stringValue.trimmingCharacters(in:.whitespacesAndNewlines))}
-            else if result == .alertThirdButtonReturn {NodiInternet.clear()}
-            else {return}
-            if self.receiver != nil {self.restartForInternet=true;self.toggleReceive()}
-            else {self.toggleReceive()}
-        } catch {let errorAlert=NSAlert(error:error);errorAlert.runModal()}
+        guard result != .alertThirdButtonReturn else{return}
+        self.roomActive=true
+        let type=result == .alertFirstButtonReturn ? "room_host" : "room_join"
+        if self.receiver == nil {self.pendingInternetCommand=(type,input.stringValue);self.toggleReceive()}
+        else {self.receiver?.command(type,address:input.stringValue)}
     }
 
     private func endpoint(for peer: SavedDevice) -> String {
@@ -689,10 +710,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.receiver?.command("wifi_request", pin: pin, address: peer.address)
             } else { self.receiver?.command("wifi_select", pin: "*") }
             self.updateInvites(event.invites ?? []); self.browser.advertise(self.invites.first)
+            NodiInternet.usage("active")
             self.receiveStatus.stringValue = "Увімкнено · лише твої пристрої"; self.receiveButton.title = "Зупинити"; self.receiveButton.isEnabled = true
             self.folderButton.isEnabled = true
             self.setBusy(self.sender != nil)
             if self.pendingQR { self.receiver?.command("new_qr") }
+            if let pending=self.pendingInternetCommand {self.pendingInternetCommand=nil;self.receiver?.command(pending.0,address:pending.1)}
             self.offerNearbyDevice()
         case "pair_request":
             if let prompt = self.discoveryPrompt {
@@ -734,6 +757,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.closeQR()
             self.offerNearbyDevice()
         case "forgotten": self.log("Пристрій видалено. Його попередній ключ більше не дозволяє надсилати сюди файли.")
+        case "internet_activation":
+            if let code=event.code {do{try NodiInternet.activate(code);NodiInternet.usage("active")}catch{self.log("Не вдалося зберегти інтернет-доступ у Keychain")}}
+        case "room_code":
+            if let code=event.code {
+                self.deviceHint.stringValue="Код кімнати: " + code + " · 5 хвилин"
+                let alert=NSAlert();alert.messageText="Код кімнати";alert.informativeText=code + "\n\nПередай іншій людині й залиш Nodi відкритим."
+                alert.addButton(withTitle:"Скопіювати");alert.addButton(withTitle:"Закрити")
+                if alert.runModal() == .alertFirstButtonReturn {NSPasteboard.general.clearContents();NSPasteboard.general.setString(code,forType:.string)}
+            }
+        case "room_closed": self.roomActive=false
+        case "room_connected": self.deviceHint.stringValue="Пристрій підключено через інтернет"
         case "internet":
             self.receiveStatus.stringValue=event.message ?? "Інтернет"
         case "received":
@@ -849,7 +883,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try task.start(arguments:["send","-json","-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
                 guard let self=self else{return}
                 if event.type=="route"{self.sendStatus.stringValue="Інтернет · "+file.lastPathComponent}
-                else if event.type=="sent"{self.sendConfirmed=true}
+                else if event.type=="sent"{self.sendConfirmed=true;NodiInternet.usage("file")}
                 else if event.type=="error" || event.type=="fatal"{failure=event.message ?? NodiL("Помилка передачі")}
             },onExit:{[weak self] exitCode in
                 guard let self=self else{return}
@@ -924,6 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.sender = nil; self.sendingText = false; self.activeSendPin = nil
                 self.setBusy(false)
                 if status == 0 {
+                    NodiInternet.usage("text")
                     self.addTextEntry(value, incoming: false)
                     self.textInput.string = ""
                     self.textStatus.stringValue = NodiL("Текст надіслано")

@@ -18,7 +18,7 @@ fi
 sdk_path="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 module_cache="$(mktemp -d "${TMPDIR:-/tmp}/nodi-swift-cache.XXXXXX")"
 trap 'rm -rf "$module_cache"' EXIT
-app_dir="$project_dir/build/Nodi.app"
+app_dir="${NODI_APP_DIR:-$project_dir/build/Nodi.app}"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 case "$(uname -m)" in
     arm64) go_arch=arm64; swift_target=arm64-apple-macos12.0 ;;
@@ -33,6 +33,7 @@ xcrun swiftc -swift-version 5 -O -target "$swift_target" \
     -module-cache-path "$module_cache" \
     -framework AppKit -framework QuartzCore -framework UniformTypeIdentifiers -framework ImageIO -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreImage macos/Nodi.swift macos/NodiEndpoint.swift macos/NodiInternet.swift -o "$app_dir/Contents/MacOS/Nodi"
 cp macos/Info.plist "$app_dir/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :NodiTestInstall bool ${NODI_TEST_INSTALL:-true}" "$app_dir/Contents/Info.plist"
 cp macos/Nodi.icns "$app_dir/Contents/Resources/Nodi.icns"
 cp android/app/src/main/assets/NodiMark.png "$app_dir/Contents/Resources/NodiMark.png"
 plutil -lint "$app_dir/Contents/Info.plist"

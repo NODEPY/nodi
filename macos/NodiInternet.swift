@@ -37,4 +37,18 @@ enum NodiInternet {
         if status==errSecItemNotFound { var item=query;item[kSecValueData as String]=clean;status=SecItemAdd(item as CFDictionary,nil) }
         guard status==errSecSuccess else{throw NSError(domain:NSOSStatusErrorDomain,code:Int(status))}
     }
+    static var testInstall:Bool {Bundle.main.object(forInfoDictionaryKey:"NodiTestInstall") as? Bool ?? true}
+    static func request(_ path:String, payload:[String:Any], completion: @escaping (Bool)->Void) {
+        guard let token=load()?["token"],let url=URL(string:"https://nodi-relay.igor-shura2011faik.workers.dev"+path),let body=try? JSONSerialization.data(withJSONObject:payload) else{completion(false);return}
+        var request=URLRequest(url:url);request.httpMethod="POST";request.timeoutInterval=15
+        request.setValue("Bearer "+token,forHTTPHeaderField:"Authorization");request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=body
+        URLSession.shared.dataTask(with:request){_,response,error in
+            completion(error==nil && (response as? HTTPURLResponse)?.statusCode==200)
+        }.resume()
+    }
+    static func usage(_ event:String) {
+        guard !testInstall && UserDefaults.standard.bool(forKey:"nodi.usageConsent") else{return}
+        request("/v1/usage",payload:["consent":true,"platform":"macos","event":event]){_ in}
+    }
+
 }
