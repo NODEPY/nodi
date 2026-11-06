@@ -11,7 +11,18 @@ The original Go loopback prototype is independent and uses a different protocol.
 
 ## Run and verify locally
 
-Requires Node.js 22 and npm. From `server/cloudflare`:
+Requires Node.js >=22 and npm. Confirm `node --version` and `npm --version`
+in the same shell. If Node is installed outside PATH, prepend its `bin` directory
+for this shell before running the commands below. On the 2026-11-06 review host:
+
+```sh
+export PATH="/private/tmp/node-v22.23.4-darwin-arm64/bin:$PATH"
+```
+
+That temporary installation currently exists, but is not a persistent prerequisite;
+replace the path with your installed Node >=22 location if it is removed.
+Miniflare needs permission to bind loopback sockets; sandbox `listen EPERM`
+means the test runner needs local socket access. From `server/cloudflare`:
 
 ```sh
 npm ci

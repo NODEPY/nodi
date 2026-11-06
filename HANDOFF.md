@@ -1,3 +1,74 @@
+# Review checkpoint — ready for physical acceptance (2026-11-06)
+
+Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
+- `180de45`: only `scripts/build-rooms.sh` and `docs/INTERNET-ALPHA.md`;
+  selects the existing MacOSX26.sdk only when SDKROOT is unset/empty, preserves
+  explicit overrides and warns if the preferred SDK is absent. Shell syntax PASS.
+- `4c4fbf9`: only `server/cloudflare/README.md`; 10-second incoming polling
+  agrees with `RunReceiver`. No secrets or unrelated changes in either diff.
+- This checkpoint adds review evidence here and documents Node/PATH and local
+  socket requirements in the Cloudflare README. Older checkpoints remain below.
+
+## Fresh local verification
+
+- `go vet ./...` and `go test -race -count=1 ./...`: PASS.
+- `npm test`: 26/26 PASS; `npm run check`: PASS (dry-run only).
+- `bash android/gradlew -p android assembleDebug testDebugUnitTest`: PASS
+  (Gradle tasks up-to-date). `git diff --check`: PASS.
+- Initial sandbox attempts could not bind loopback sockets or write Gradle's
+  existing user cache. Repeating with those permissions succeeded; these were
+  environment failures, not test regressions.
+- Existing Node 22.23.4 in `/private/tmp/node-v22.23.4-darwin-arm64/bin`
+  was used; no runtime installation or shell-profile access was needed.
+- No public interoperability test was rerun locally and no owner device was
+  registered, rotated, installed or cleared. Prior 11/11 evidence remains historical.
+
+## Existing artifacts rechecked (not rebuilt or replaced)
+
+| File in build/ | SHA-256 |
+| --- | --- |
+| nodi-android-rooms-test.apk | `32f009cddd2c2b86d3688080dd6b45865834ab2cdfd2e8ecb9d9d124aceea6db` |
+| nodi-android-rooms.apk | `10ec9c0654c936d4ff4a0f8f436e4606601a648a21f9eb1be15b9a8f5116aeff` |
+| nodi-macos-rooms-test.zip | `e00d984a6de457bd49e947f91819fec8f31ee50999f112b7d34f5fbb30da5bb4` |
+| nodi-macos-rooms.zip | `f2992412fc0f9b383cf1028c5cb9fd463e2b29a3eca43969577b1e03ea5e05d8` |
+
+- APK DEX `BuildConfig.NODI_TEST_INSTALL`: test `true`, public `false`.
+  Both APKs are 17,057,492 bytes, version `1.0.0-alpha.5`, code `5`.
+  Both APK signatures verify with certificate SHA-256
+  `c14152d85e91dc9f7c7ea177f12f5c0c62f95afc7a313830ed3027638ce198b7`.
+- ZIP Info.plist `NodiTestInstall`: test `true`, public `false`.
+  Existing macOS version fields are `1.0.0` / build `7`, matching the tracked
+  `macos/Info.plist`; they are not Android's alpha.5/code 5. No version was changed.
+- All four archives have no `.dev.vars`, `internet-activation` or `private-report`
+  paths. Decompressed contents were scanned for admin assignments, literal bearer
+  credentials and PEM private-key markers without printing values. The only
+  pattern hit was a concatenated string in both Go cores, also reproduced by a
+  fresh source build; it is not evidence of an embedded credential. No credential
+  was identified. This pattern scan does not prove absence of arbitrary encoded
+  secrets; private activation/environment files were not read for comparison.
+
+## Manual acceptance and optional hardening
+
+All scenarios 1–10 in `docs/INTERNET-ALPHA.md` remain **NOT RUN**. A person must
+run them on the physical Mac on Wi-Fi and S21 FE on mobile data. Automated
+checks do not establish physical-device acceptance.
+
+Proposal only: a separate `/v1/rooms/join` quota is not required to make random
+brute force of an 80-bit, five-minute code impractical: about 600 guesses per
+identity give roughly 5e-22 success probability against one code (fixed-window
+boundaries can allow an additional burst). Host approval is still required.
+A lower quota can reduce abusive failed joins and resource use, but multiple
+self-enrolled identities can bypass a per-device-only defense. If desired later,
+add a separate per-device join counter/window, e.g. 10 attempts/minute, checked
+before room lookup, returning 429 and counting unsuccessful attempts too; retain
+the global 120/device/minute limit. Add quota/reset tests. Do not lock the room
+itself on failures, which would enable denial of service. No limit, Worker source
+or deployed Worker was changed in this review.
+
+No merge, release, tag, force push, paid-plan change or main modification.
+
+---
+
 # Current checkpoint — rooms deployed and verified (2026-11-06)
 
 Base `ceb5c1c`; branch `codex/internet-relay`. No merge, release, tag, version
