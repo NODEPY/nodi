@@ -49,6 +49,7 @@ class GoInteropTest {
             check(ready.getString("type") == "ready")
             code = ready.getJSONArray("invites").getJSONObject(0).getString("code")
         }
+        fun command(value:JSONObject){process.outputStream.write((value.toString()+"\n").toByteArray());process.outputStream.flush()}
         override fun close() {
             process.destroy()
             if (!process.waitFor(5, TimeUnit.SECONDS)) {
@@ -114,6 +115,8 @@ class GoInteropTest {
         val book = DeviceBook(File(temp.newFolder(), "devices.json"))
         val peerPin = "a".repeat(64)
         private val token = "b".repeat(64)
+        lateinit var certificate:X509Certificate
+        lateinit var privateKey:PrivateKey
         val receiver: NodiReceiver
         val code: String
         private val worker: Thread
@@ -140,7 +143,9 @@ class GoInteropTest {
                     return incoming.name
                 }
             }
-            receiver = NodiReceiver(keys.getKey("test", "test-password".toCharArray()) as PrivateKey,
+            certificate=keys.getCertificate("test") as X509Certificate
+            privateKey=keys.getKey("test", "test-password".toCharArray()) as PrivateKey
+            receiver = NodiReceiver(privateKey,
                 keys.getCertificate("test") as X509Certificate, cache, store, {},
                 bindAddress = "127.0.0.1", devices = if (trusted) book else null,
                 onText = { texts.put(it) })
@@ -204,6 +209,62 @@ class GoInteropTest {
                 }
             }
         } finally {for(pin in registered)admin.api("DELETE","/v1/admin/devices/$pin")}
+    }
+
+    @Test(timeout=240000) fun publicRoomEnrollmentAndBidirectionalTransfer() {
+        val adminToken=System.getenv("NODI_TEST_RELAY_ADMIN")
+        org.junit.Assume.assumeTrue(!adminToken.isNullOrEmpty())
+        val admin=NodiInternet(adminToken!!);val registered=mutableListOf<String>()
+        val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val storage=temp.newFolder()
+            val goPin=GoReceiver(storage).use{NodiInvite.parse(it.code).fingerprint.hex()};registered.add(goPin)
+            GoReceiver(storage).use { goReceiver ->
+                fun next(type:String):JSONObject {
+                    val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(60)
+                    while(System.nanoTime()<until){val e=goReceiver.events.poll(1,TimeUnit.SECONDS)?:continue
+                        if(e.optString("type")=="error")error(e.optString("message"))
+                        if(e.optString("type")==type)return e}
+                    error("Missing event: $type")
+                }
+                KotlinReceiver(trusted=true).use { receiver ->
+                    val pin=receiver.receiver.fingerprint;registered.add(pin)
+                    val api=NodiInternet("")
+                    val nonce=api.api("POST","/v1/enroll/challenge",JSONObject().put("id",pin)).getString("nonce")
+                    val signature=java.security.Signature.getInstance("SHA256withECDSA").apply{initSign(receiver.privateKey);update("nodi-enroll-v1\n$pin\n$nonce".toByteArray())}.sign()
+                    val result=api.api("POST","/v1/enroll",JSONObject().put("id",pin).put("nonce",nonce)
+                        .put("certificate",Base64.getEncoder().encodeToString(receiver.certificate.encoded))
+                        .put("signature",Base64.getEncoder().encodeToString(signature)).put("testInstall",true))
+                    val relay=NodiInternet(result.getString("token"))
+                    goReceiver.command(JSONObject().put("type","room_host"))
+                    val activation=next("internet_activation").getString("code").removePrefix("nodi-internet1-")
+                    val goToken=JSONObject(String(Base64.getUrlDecoder().decode(activation))).getString("token")
+                    val room=next("room_code").getString("code")
+                    val joined=executor.submit {NodiRooms(relay).join(room,JSONObject().put("fingerprint",pin).put("name","Kotlin room test")){receiver.book.remember(it)}}
+                    val request=next("pair_request");assertEquals(room,request.getString("compare"))
+                    goReceiver.command(JSONObject().put("type","pair_response").put("id",request.getString("id")).put("allow",true))
+                    joined.get(40,TimeUnit.SECONDS);next("room_connected")
+                    // Reverse room ownership to exercise Kotlin host and Go join too.
+                    val roomCodes=LinkedBlockingQueue<String>()
+                    val hosting=executor.submit {NodiRooms(relay).host(JSONObject().put("fingerprint",pin).put("name","Kotlin host"),{roomCodes.put(it)},{_,_->true}){receiver.book.remember(it)}}
+                    val reverseCode=roomCodes.poll(15,TimeUnit.SECONDS)?:error("Kotlin room did not open")
+                    goReceiver.command(JSONObject().put("type","room_join").put("address",reverseCode))
+                    next("room_connected");hosting.get(30,TimeUnit.SECONDS)
+                    val peer=receiver.book.list().first{it.fingerprint==goPin}
+                    val toGo=peer.code("127.0.0.1:1")
+                    val toKotlin=TrustedDevice("Kotlin","127.0.0.1:1",pin,peer.token).code()
+                    relay.receive(receiver.receiver.port,{listOf(goPin)},{}).use{
+                        val bytes=ByteArray(220000){(it%239).toByte()}
+                        send(toGo,"room-kotlin.bin",bytes,NodiTransfer(relay));next("received")
+                        assertArrayEquals(bytes,File(goReceiver.inbox,"room-kotlin.bin").readBytes())
+                        NodiTransfer(relay).sendText(NodiInvite.parse(toGo),"Room Kotlin → Go");assertEquals("Room Kotlin → Go",next("text_received").getString("text"))
+                        val file=File(temp.newFolder(),"room-go.bin").apply{writeBytes(bytes)}
+                        assertEquals(0,go("send",toKotlin,file,relayToken=goToken));assertArrayEquals(bytes,File(receiver.inbox,"room-go.bin").readBytes())
+                        assertEquals(0,go("send-text",toKotlin,text="Room Go → Kotlin",relayToken=goToken));assertEquals("Room Go → Kotlin",receiver.texts.poll(15,TimeUnit.SECONDS))
+                    }
+                }
+            }
+        }finally{executor.shutdownNow();for(pin in registered)admin.api("DELETE","/v1/admin/devices/$pin")}
     }
 
     @Test(timeout = 60000) fun manualEndpointPreservesTrustForFilesAndText() {

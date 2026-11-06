@@ -16,7 +16,7 @@ dependencies {
 // Compile the actual Android transport sources, not a second protocol implementation.
 kotlin.sourceSets.main {
     kotlin.srcDir("../../android/app/src/main/java")
-    kotlin.include("**/NodiProtocol.kt", "**/NodiReceiver.kt", "**/NodiPairing.kt", "**/NodiDevices.kt", "**/NodiEndpoint.kt", "**/NodiInternet.kt")
+    kotlin.include("**/NodiProtocol.kt", "**/NodiReceiver.kt", "**/NodiPairing.kt", "**/NodiDevices.kt", "**/NodiEndpoint.kt", "**/NodiInternet.kt", "**/NodiRooms.kt")
 }
 
 val core = layout.buildDirectory.file("nodi-core")
