@@ -27,7 +27,7 @@ object NodiInternetStore {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
     }
-    fun activate(c:Context,code:String) {
+    @Synchronized fun activate(c:Context,code:String) {
         require(code.length<2048 && code.startsWith(PREFIX)){"Неправильний код інтернет-доступу"}
         val config=JSONObject(String(Base64.getUrlDecoder().decode(code.removePrefix(PREFIX)),Charsets.UTF_8))
         val pin=config.getString("fingerprint");val token=config.getString("token")
@@ -41,12 +41,29 @@ object NodiInternetStore {
         val f=file(c);val out=f.startWrite()
         try{out.write(bytes);f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
     }
-    fun client(c:Context):NodiInternet?=try{
+    @Synchronized fun client(c:Context):NodiInternet?=try{
         val bytes=file(c).readFully();require(bytes.size in 29..4096)
         val cipher=Cipher.getInstance("AES/GCM/NoPadding").apply{init(Cipher.DECRYPT_MODE,key(),GCMParameterSpec(128,bytes.copyOfRange(0,12)))}
         val config=JSONObject(String(cipher.doFinal(bytes.copyOfRange(12,bytes.size)),Charsets.UTF_8))
         NodiIdentity.create(persistent=true).use{identity->require(MessageDigest.getInstance("SHA-256").digest(identity.certificate.encoded).hex()==config.getString("fingerprint"))}
         NodiInternet(config.getString("token"))
     }catch(_:Exception){null}
-    fun clear(c:Context){file(c).delete()}
+    @Synchronized fun ensure(c:Context):NodiInternet {
+        client(c)?.let{return it}
+        NodiIdentity.create(persistent=true).use { identity ->
+            val pin=MessageDigest.getInstance("SHA-256").digest(identity.certificate.encoded).hex()
+            val api=NodiInternet("")
+            val nonce=api.api("POST","/v1/enroll/challenge",JSONObject().put("id",pin)).getString("nonce")
+            val signature=java.security.Signature.getInstance("SHA256withECDSA").apply{
+                initSign(identity.key);update("nodi-enroll-v1\n$pin\n$nonce".toByteArray(Charsets.UTF_8))
+            }.sign()
+            val result=api.api("POST","/v1/enroll",JSONObject().put("id",pin).put("nonce",nonce)
+                .put("certificate",Base64.getEncoder().encodeToString(identity.certificate.encoded))
+                .put("signature",Base64.getEncoder().encodeToString(signature)).put("testInstall",BuildConfig.NODI_TEST_INSTALL))
+            val config=JSONObject().put("fingerprint",pin).put("token",result.getString("token"))
+            activate(c,PREFIX+Base64.getUrlEncoder().withoutPadding().encodeToString(config.toString().toByteArray(Charsets.UTF_8)))
+        }
+        return client(c) ?: error("Не вдалося зберегти інтернет-доступ")
+    }
+    @Synchronized fun clear(c:Context){file(c).delete()}
 }

@@ -3,6 +3,7 @@ plugins {
 }
 
 android {
+    buildFeatures { buildConfig = true }
     namespace = "dev.nodi.android"
     compileSdk {
         version = release(37)
@@ -12,6 +13,7 @@ android {
         applicationId = "dev.nodi.android"
         minSdk = 29
         targetSdk = 37
+        buildConfigField("boolean", "NODI_TEST_INSTALL", providers.gradleProperty("nodiTestInstall").orElse("true").get())
         versionCode = 5
         versionName = "1.0.0-alpha.5"
 

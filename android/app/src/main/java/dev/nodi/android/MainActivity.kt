@@ -183,6 +183,7 @@ class MainActivity : Activity() {
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
         super.onCreate(savedInstanceState)
         deviceBook = NodiDeviceStore.get(this)
+        NodiMetrics.report(this,"active")
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false)
@@ -337,6 +338,7 @@ class MainActivity : Activity() {
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(scanButton,8,dp(44))
         deviceCard.addItem(button("Інтернет") { internetSettings() },8,dp(44))
+        deviceCard.addItem(button("Відгук / приватність") { feedbackSettings() },8,dp(44))
         deviceCard.addItem(button("Адреса / VPN") { editEndpoint() },8,dp(44))
         connectionColumn.addItem(deviceCard, 16)
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
@@ -413,6 +415,7 @@ class MainActivity : Activity() {
                 status.text = "Зупиняю передачу…"
                 cancelBatch()
                 pairClient?.cancel()
+                roomThread?.interrupt()
             } else {
                 status.text = tr("Вибір файлів очищено")
             }
@@ -535,6 +538,7 @@ class MainActivity : Activity() {
         worker.execute {
             try {
                 session.sendText(invite, value) { update -> ui { textPhase(update) } }
+                NodiMetrics.report(this,"text")
                 ui {
                     texting = false; transfer = null
                     addTextEntry(value, incoming = false)
@@ -611,25 +615,60 @@ class MainActivity : Activity() {
         if (uri.host.isNullOrEmpty()) return null
         return uri
     }
+    private fun feedbackSettings() {
+        val input=EditText(this).apply{hint="Відгук автору (до 1000 символів)";filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}
+        val consent=android.widget.CheckBox(this).apply{text="Ділитися статистикою використання";isChecked=NodiMetrics.consent(this@MainActivity)}
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent)}
+        android.app.AlertDialog.Builder(this).setTitle("Відгук і приватність")
+            .setMessage("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів."+(if(BuildConfig.NODI_TEST_INSTALL)" Ця тестова збірка не враховується." else ""))
+            .setView(box).setPositiveButton("Надіслати відгук"){_,_->
+                NodiMetrics.consent(this,consent.isChecked)
+                val text=input.text.toString().trim()
+                if(text.isNotEmpty())Thread({try{NodiInternetStore.ensure(this).api("POST","/v1/feedback",org.json.JSONObject().put("text",text));ui{status.text="Відгук надіслано"}}catch(_:Exception){ui{status.text="Відгук не надіслано · спробуй пізніше"}}},"Nodi-feedback").start()
+            }.setNeutralButton("Зберегти"){_,_->NodiMetrics.consent(this,consent.isChecked);NodiMetrics.report(this,"active")}
+            .setNegativeButton("Закрити",null).show()
+    }
+    @Volatile private var roomThread:Thread?=null
     private fun internetSettings() {
+        if(roomThread!=null){android.app.AlertDialog.Builder(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
+            .setPositiveButton("Скасувати кімнату"){_,_->roomThread?.interrupt()}.setNegativeButton("Залишити",null).show();return}
         if(busy || texting || pairing || scanning)return
-        val input=EditText(this).apply {
-            hint="Код активації приватної альфи"
-            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        fun activate(raw:String) {
-            try { NodiInternetStore.activate(this,raw.trim());receiverService?.refreshInternet();status.text="Інтернет увімкнено" }
-            catch(_:Exception){status.text="Код не підходить цьому пристрою"}
-        }
-        android.app.AlertDialog.Builder(this).setTitle("Інтернет Nodi")
-            .setMessage(if(NodiInternetStore.client(this)!=null) "Увімкнено. Nodi автоматично використає інтернет, якщо локальне з’єднання недоступне. Ліміт альфи — до 16 MiB на файл." else "Активуй цей пристрій кодом приватної альфи. IP-адреси й VPN не потрібні. Спарювання пристроїв виконується через звичайний QR.")
-            .setView(input).setPositiveButton("Активувати"){_,_->activate(input.text.toString())}
-            .setNegativeButton("Закрити",null)
-            .setNeutralButton(if(NodiInternetStore.client(this)!=null) "Вимкнути" else "Сканувати QR"){_,_->
-                if(NodiInternetStore.client(this)!=null){NodiInternetStore.clear(this);receiverService?.refreshInternet();status.text="Інтернет вимкнено"}
-                else GmsBarcodeScanning.getClient(this,GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
-                    .startScan().addOnSuccessListener{barcode->ui{activate(barcode.rawValue ?: "")}}
-            }.show()
+        val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true}
+        android.app.AlertDialog.Builder(this).setTitle("Інтернет · кімната")
+            .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.")
+            .setView(input).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
+            .setNeutralButton("Приєднатися"){_,_->internetRoom(input.text.toString())}
+            .setNegativeButton("Закрити",null).show()
+    }
+    private fun internetRoom(code:String?) {
+        pairing=true;renderBusy();status.text="Підключаю інтернет…"
+        roomThread=Thread({
+            try {
+                val client=NodiInternetStore.ensure(this)
+                ui{receiverService?.refreshInternet()}
+                val own=NodiIdentity.create(persistent=true).use{identity->org.json.JSONObject()
+                    .put("fingerprint",java.security.MessageDigest.getInstance("SHA-256").digest(identity.certificate.encoded).hex())
+                    .put("name","Nodi Android")}
+                if(Thread.currentThread().isInterrupted)throw InterruptedException()
+                val rooms=NodiRooms(client)
+                val save:(TrustedDevice)->Unit={peer->deviceBook.remember(peer)}
+                if(code==null)rooms.host(own,{value->ui{
+                    status.text="Код кімнати: $value"
+                    android.app.AlertDialog.Builder(this).setTitle("Код кімнати").setMessage("$value\n\nПередай код іншій людині. Залиш Nodi відкритим.")
+                        .setPositiveButton("Скопіювати"){_,_->(getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Nodi room",value))}
+                        .setNegativeButton("Закрити",null).show()
+                }},{name,value->
+                    val answer=java.util.concurrent.atomic.AtomicBoolean(false);val latch=java.util.concurrent.CountDownLatch(1)
+                    ui{android.app.AlertDialog.Builder(this).setTitle("Підключити $name?").setMessage("Код кімнати: $value\nПідтверджуй лише очікуваний пристрій.")
+                        .setPositiveButton("Підключити"){_,_->answer.set(true);latch.countDown()}
+                        .setNegativeButton("Відхилити"){_,_->latch.countDown()}.setOnCancelListener{latch.countDown()}.show()}
+                    latch.await(60,java.util.concurrent.TimeUnit.SECONDS)&&answer.get()
+                },save)
+                else {ui{status.text="Очікую підтвердження власника кімнати…"};rooms.join(code,own,save)}
+                ui{status.text="Пристрій підключено · увімкни приймання";receiverService?.refreshInternet()}
+            }catch(e:Exception){ui{status.text="Не вдалося підключитися";detail.text=e.message ?: "Спробуй новий код кімнати"}}
+            finally{roomThread=null;ui{pairing=false;renderBusy()}}
+        },"Nodi-room").apply{start()}
     }
 
     private fun parseSelectedInvite(): NodiInvite {
@@ -883,6 +922,7 @@ class MainActivity : Activity() {
                         openSource={contentResolver.openInputStream(file.uri) ?: throw IOException("Не вдалося прочитати вибраний файл.")},
                         onProgress={update -> ui {showProgress(update);detail.text="${index+1}/${files.size} · ${file.name}\n${detail.text}"}})
                     sent++
+                    NodiMetrics.report(this,"file")
                 }
             } catch(error:Exception){failure=error}
             ui {
@@ -1626,6 +1666,8 @@ class MainActivity : Activity() {
         super.onStop()
     }
     override fun onDestroy() {
+        roomThread?.interrupt()
+        roomThread = null
         alive = false
         pairClient?.cancel()
         cancelBatch()
