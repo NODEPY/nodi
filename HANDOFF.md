@@ -1,3 +1,82 @@
+# Current checkpoint — rooms deployed and verified (2026-11-06)
+
+Base `ceb5c1c`; branch `codex/internet-relay`. No merge, release, tag, version
+bump, paid-plan change or force push. `main` was not modified.
+
+## Implemented
+
+- EC certificate proof-of-possession self-enrollment with one-minute, one-use
+  challenges. Revoked identities cannot re-enroll; explicit admin restore remains.
+- Encrypted 16-character (80-bit) room codes: host creates, guest joins, host
+  approves the expected fingerprint. Only the code digest and AES-256-GCM blob
+  reach the server. Approval establishes mutual grants; the shared transfer token
+  stays inside the encrypted blob. Inner pinned TLS remains unchanged.
+- Go, Android and macOS room clients/UI; Android KeyStore and macOS Keychain
+  storage; room cancellation; saved pairing after room success.
+- Opt-in usage (`active`/`file`/`text`) and feedback endpoints; test builds send
+  no metrics. Owner-only `scripts/internet-report.mjs` writes
+  `build/private-report/index.html` (0600/0700). Admin token never in clients/HTML.
+- Download redirect counters (`/download/android`, `/download/macos`, test
+  variants) return 503 until `DOWNLOAD_*_URL` is configured; no release created.
+- Storage format 2 migration, bounded records, `legacy-v1-backup` retained.
+- Test/public build separation is explicit in `scripts/build-rooms.sh`; the
+  Android property and macOS Info.plist field are set per variant.
+
+## Deployed and verified
+
+- Worker: https://nodi-relay.igor-shura2011faik.workers.dev
+- Active version `9f3d2050-d8f4-4dc8-b20b-a1a984c379de`, created
+  2026-11-06T16:07:14Z (confirmed with `wrangler deployments list`).
+- Full Kotlin/Go interop: **11/11 PASS**, including both public tests
+  `publicRoomEnrollmentAndBidirectionalTransfer` and
+  `publicRelayKotlinGoFilesAndTextBothDirections`. This covers self-enrollment,
+  both room ownership directions, files/text both ways, byte comparison, and
+  temporary device cleanup.
+- Server Miniflare: **26/26 PASS**, 40.4 s. `npm run check` dry-run PASS
+  (22.69 KiB, gzip 6.42 KiB); no deploy from this checkpoint.
+- Go: `go vet ./...` PASS; `go test -race -count=1 ./...` PASS
+  (`internal/internet`, `internal/relay`, `internal/transfer`).
+- Android `assembleDebug testDebugUnitTest`: BUILD SUCCESSFUL.
+- macOS builds with `SDKROOT=.../MacOSX26.sdk`: both variants and ad-hoc
+  signature verification PASS. Default SDK 27.0 is incompatible with Swift 6.3.3
+  in this environment; use the documented SDKROOT.
+- Build artifacts verified:
+  - Android test `BuildConfig.NODI_TEST_INSTALL=true`; public `false`.
+    Both 17,057,492 bytes, debug cert SHA-256
+    `c14152d85e91dc9f7c7ea177f12f5c0c62f95afc7a313830ed3027638ce198b7`.
+  - macOS test `NodiTestInstall=true`; public `false`; both codesign strict PASS.
+- New edge tests: room code cannot be reused after approval/cancellation; third
+  device gets 404; room joins share the 120/device/minute quota; deleting a room
+  removes its persisted encrypted blob; Android clears `roomThread` in
+  `onDestroy`.
+- Owner devices are marked test on the server; private report exists locally.
+  Do not print or commit activation files or tokens.
+
+## Remaining
+
+- Physical Mac (Wi-Fi) ↔ S21 FE (mobile data) manual run: room creation in both
+  directions, file/text both ways, restart persistence, cancellation, wrong and
+  expired codes, and test/public statistics behavior. The checklist and result
+  table are in `docs/INTERNET-ALPHA.md`; all ten scenarios are still NOT RUN.
+- No GitHub release exists, so download counters stay 503. Configuration commands
+  are documented in `server/cloudflare/README.md`; do not publish without approval.
+- No new merge/tag/release/version bump. PR #2/base history is unchanged.
+- Historical checkpoints below are preserved as history; statements about missing
+  rooms/client integration are superseded by this checkpoint.
+
+## Commits in this checkpoint
+
+- `0f4edf5` server rooms, self-enrollment, insights and tests
+- `012244d` Go room enrollment and relay lifecycle
+- `e3b99ca` Android rooms, secure enrollment and feedback UI
+- `584cecc` macOS room UI, Keychain enrollment and feedback
+- `16f39c3` public room interoperability coverage
+- `7466999` reproducible rooms build script
+- `dd22f29` owner-only private report script
+- `3dd1e65` rooms/build/manual-test documentation
+
+---
+
 # Latest checkpoint — Android/macOS Internet integration
 
 Updated: 2026-11-04. Branch `codex/internet-relay`; base `ceb5c1c`.
