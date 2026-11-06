@@ -98,8 +98,8 @@ Tokens and tickets must not be placed in URLs or logs.
 | PUT /v1/admin/test-devices/:id | admin | mark test install and purge its metrics |
 | GET /download/android, /download/macos | none | counted redirect; 503 until configured |
 
-Receiver polls /v1/incoming only while receiving is enabled (for example every
-15 seconds). Presence expires after 45 seconds and means recent polling, not
+Receiver polls /v1/incoming only while receiving is enabled (every 10 seconds).
+Presence expires after 45 seconds and means recent polling, not
 a guarantee of connectivity. Each side gets a distinct random ticket bound
 to its device and session; consuming one is serialized and persisted. Tickets
 cannot reconnect a used socket. A lost upgrade response requires a new session.
