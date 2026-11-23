@@ -10,6 +10,13 @@ const hash = async s => hex(await crypto.subtle.digest('SHA-256', new TextEncode
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control': 'no-store'}});
 const fail = (status, error) => json({error}, status);
 const idOK = s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
+// Downloads: owner browsers opt out via a cookie set by a link derived from ADMIN_TOKEN;
+// link-preview bots and crawlers are not counted either.
+const DOWNLOAD_PATH = /^\/download\/(?:(test)\/(android|macos)|(android|macos)|owner\/([a-f0-9]{64}))$/;
+const BOT_UA = /bot|crawl|spider|preview|facebookexternalhit|embedly|whatsapp|skype|curl|wget|python|go-http|headless/i;
+const ownerLink = token => hash('nodi-owner-link:' + token);
+const ownerCookie = token => hash('nodi-owner-cookie:' + token);
+const cookie = (request, name) => (request.headers.get('Cookie') || '').split(/;\s*/).find(c => c.startsWith(name + '='))?.slice(name.length + 1);
 async function body(request, max = 1024) {
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw Error('body');
   const reader = request.body?.getReader(); if (!reader) throw Error('body');
@@ -97,7 +104,7 @@ export class RelayHub {
   async fetch(request) {
     const admission = await this.ctx.blockConcurrencyWhile(async () => {
       const s = await this.load(); this.prune(s);
-      const auth = (['/v1/enroll/challenge','/v1/enroll'].includes(new URL(request.url).pathname)||/^\/download\/(test\/)?(android|macos)$/.test(new URL(request.url).pathname)) ? await this.publicAdmission(request,s) : await this.authorize(request, s, true);
+      const auth = (['/v1/enroll/challenge','/v1/enroll'].includes(new URL(request.url).pathname)||DOWNLOAD_PATH.test(new URL(request.url).pathname)) ? await this.publicAdmission(request,s) : await this.authorize(request, s, true);
       await this.save(s); return auth;
     });
     if (admission instanceof Response) return admission;
@@ -171,11 +178,18 @@ export class RelayHub {
   }
   async route(request, s, payload) {
     const path = new URL(request.url).pathname, method = request.method;
-    const download=path.match(/^\/download\/(test\/)?(android|macos)$/);
+    const download=path.match(DOWNLOAD_PATH);
     if(download&&method==='GET') {
-      const target=this.env[download[2]==='android'?'DOWNLOAD_ANDROID_URL':'DOWNLOAD_MACOS_URL'];
+      if(download[4]) {
+        if(download[4]!==await ownerLink(this.env.ADMIN_TOKEN))return fail(404,'not_found');
+        return new Response('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Nodi</title><p>Завантаження Nodi з цього браузера більше не враховуються в статистиці.</p>',{status:200,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'",'Referrer-Policy':'no-referrer','Set-Cookie':`nodi_owner=${await ownerCookie(this.env.ADMIN_TOKEN)}; Path=/download; Max-Age=34560000; Secure; HttpOnly; SameSite=Lax`}});
+      }
+      const platform=download[2]||download[3];
+      const target=this.env[platform==='android'?'DOWNLOAD_ANDROID_URL':'DOWNLOAD_MACOS_URL'];
       if(typeof target!=='string'||!target.startsWith('https://github.com/NODEPY/nodi/releases/download/'))return fail(503,'download_not_published');
-      if(!download[1]){const day=new Date().toISOString().slice(0,10);const d=(s.downloads[day]||={android:0,macos:0});d[download[2]]++;}
+      const owner=cookie(request,'nodi_owner')===await ownerCookie(this.env.ADMIN_TOKEN);
+      const bot=BOT_UA.test(request.headers.get('User-Agent')||'');
+      if(download[3]&&!owner&&!bot){const day=new Date().toISOString().slice(0,10);const d=(s.downloads[day]||={android:0,macos:0});d[platform]++;}
       return new Response(null,{status:302,headers:{Location:target,'Cache-Control':'no-store'}});
     }
     if(['/v1/enroll/challenge','/v1/enroll'].includes(path))return this.enroll(request,s,payload);
