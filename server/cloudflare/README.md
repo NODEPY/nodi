@@ -226,27 +226,35 @@ with mode 0600. Neither the token nor a public dashboard is created.
 Download request counting is available at `/download/android` and `/download/macos`
 only after `DOWNLOAD_ANDROID_URL` / `DOWNLOAD_MACOS_URL` point to published assets
 under `https://github.com/NODEPY/nodi/releases/download/`. Until configured, the
-routes return 503 and do not count anything. `/download/test/android` and
-`/download/test/macos` bypass counting for owner test downloads. These are counts
-of redirects, not completed downloads or unique people. Direct GitHub downloads
-cannot be attributed to, or filtered by, the owner's physical devices.
+routes return 503 and do not count anything. These are counts of redirects, not
+completed downloads or unique people. Direct GitHub downloads are not counted.
+
+Not counted:
+- `/download/test/android` and `/download/test/macos` (owner test links);
+- requests from browsers that opened the **owner link** once. The link is
+  `/download/owner/<sha256("nodi-owner-link:" + ADMIN_TOKEN)>`; it sets an
+  HttpOnly cookie `nodi_owner=<sha256("nodi-owner-cookie:" + ADMIN_TOKEN)>` for
+  `/download` (400 days). Neither value reveals the admin token, and a wrong link
+  returns 404. `node scripts/internet-report.mjs` prints the link; open it once on
+  every device and browser you use. Clearing cookies or a private window needs it again;
+- link-preview bots, crawlers and command-line clients (User-Agent filter).
 
 After publishing the APK and ZIP in a GitHub release, configure both values from
-`server/cloudflare` (replace `<tag>` with the published release tag):
+`server/cloudflare` (replace `<tag>` and file names with the published assets):
 
 ```sh
-printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/nodi-android-rooms.apk' \
+printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/Nodi-Android-<alpha>.apk' \
   | npx wrangler secret put DOWNLOAD_ANDROID_URL
-printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/nodi-macos-rooms.zip' \
+printf '%s' 'https://github.com/NODEPY/nodi/releases/download/<tag>/Nodi-macOS-arm64-<alpha>.zip' \
   | npx wrangler secret put DOWNLOAD_MACOS_URL
 ```
 
 Wrangler uploads each value as a Worker secret and creates a new version; no
 `wrangler deploy` is needed only for these two values. Run `npm run check` first
 and `npx wrangler deploy` only if code or configuration also changed. Verify with
-`curl -sI https://nodi-relay.igor-shura2011faik.workers.dev/download/android`
-(expect `302` and a `Location` under the release URL) and
-`.../download/test/android` (expect `302` without incrementing the counter).
+`curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://nodi-relay.igor-shura2011faik.workers.dev/download/android`
+(expect `302` and the release URL; curl itself is not counted). HEAD requests
+return 405.
 
 Capacity remains private-alpha: 64 registered identities, 32 pending rooms,
 16 relay sessions total. Public enrollment is limited globally and per source

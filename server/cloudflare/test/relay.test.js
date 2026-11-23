@@ -311,15 +311,28 @@ test('statistics are admin-only, require consent and exclude test installs',asyn
  assert.ok(!JSON.stringify(after).includes(a.id));assert.ok(!JSON.stringify(after).includes(a.token));
 });
 
-test('download redirects count separately and test links are excluded',async()=>{
+test('download redirects count separately; test links, owner browsers and bots are excluded',async()=>{
  const isolated=new Miniflare({modules:true,scriptPath:decodeURIComponent(new URL('../src/worker.js',import.meta.url).pathname),compatibilityFlags:['nodejs_compat'],script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin,DOWNLOAD_ANDROID_URL:'https://github.com/NODEPY/nodi/releases/download/test/app.apk'}});
  try {
-  const get=path=>isolated.dispatchFetch('https://relay.test'+path,{redirect:'manual'});
+  const browser='Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/150 Mobile Safari/537.36';
+  const get=(path,headers={})=>isolated.dispatchFetch('https://relay.test'+path,{redirect:'manual',headers:{'User-Agent':browser,...headers}});
+  const sha=s=>createHash('sha256').update(s).digest('hex');
   assert.equal((await get('/download/android')).status,302);
   assert.equal((await get('/download/test/android')).status,302);
   assert.equal((await get('/download/macos')).status,503);
   assert.equal((await get('/v1/admin/stats')).status,401);
+  assert.equal((await get('/download/android',{'User-Agent':'TelegramBot (like TwitterBot)'})).status,302);
+  assert.equal((await get('/download/owner/'+'0'.repeat(64))).status,404);
+  const owner=await get('/download/owner/'+sha('nodi-owner-link:'+admin));
+  assert.equal(owner.status,200);
+  const setCookie=owner.headers.get('Set-Cookie');
+  assert.match(setCookie,/^nodi_owner=[a-f0-9]{64}; Path=\/download; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/);
+  const ownerValue=setCookie.split(';')[0];
+  assert.equal(ownerValue,'nodi_owner='+sha('nodi-owner-cookie:'+admin));
+  assert.ok(!setCookie.includes(admin));
+  assert.equal((await get('/download/android',{Cookie:'theme=dark; '+ownerValue})).status,302);
+  assert.equal((await get('/download/android',{Cookie:'nodi_owner='+'f'.repeat(64)})).status,302);
   const stats=await (await isolated.dispatchFetch('https://relay.test/v1/admin/stats',{headers:{Authorization:'Bearer '+admin}})).json();
-  assert.deepEqual(Object.values(stats.downloadRequests),[{android:1,macos:0}]);
+  assert.deepEqual(Object.values(stats.downloadRequests),[{android:2,macos:0}]);
  }finally{await isolated.dispose();}
 });
