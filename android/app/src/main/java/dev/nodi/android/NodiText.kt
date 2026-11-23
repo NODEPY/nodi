@@ -10,6 +10,14 @@ object NodiText {
   return source
  }
  private val words=linkedMapOf(
+"Зберегти" to arrayOf("Save", "Сохранить"),
+"Адреса / VPN" to arrayOf("Address / VPN", "Адрес / VPN"),
+"Адреса вручну" to arrayOf("Manual address", "Адрес вручную"),
+"Автоматично" to arrayOf("Automatic", "Автоматически"),
+"Адреси цього пристрою:" to arrayOf("This device’s addresses:", "Адреса этого устройства:"),
+"Увімкни приймання, щоб побачити адресу." to arrayOf("Enable receiving to see the address.", "Включи приём, чтобы увидеть адрес."),
+"Введи IPv4:порт, наприклад 100.64.0.2:7331" to arrayOf("Enter IPv4:port, for example 100.64.0.2:7331", "Введи IPv4:порт, например 100.64.0.2:7331"),
+"Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися." to arrayOf("Pair devices using QR or Wi-Fi first. Different networks need a VPN or direct access. Enter the other device’s IPv4:port; the port may change when its receiver restarts.", "Сначала свяжи устройства через QR или Wi-Fi. В разных сетях нужен VPN или прямой доступ. Введи IPv4:порт другого устройства; после перезапуска приёмника порт может измениться."),
 "Заверши поточну дію та поділися ще раз." to arrayOf("Finish the current action, then share again.","Заверши текущее действие и поделись ещё раз."),
 "Не вдалося прийняти файли або текст. Вибери до 100 файлів або текст до 64 КБ." to arrayOf("Could not accept the files or text. Choose up to 100 files or text up to 64 KiB.","Не удалось принять файлы или текст. Выбери до 100 файлов или текст до 64 КБ."),
 "Файл отримано" to arrayOf("File received","Файл получен"),

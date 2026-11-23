@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0-alpha.6 — 2026-11-23
+
+### ✨ New
+
+- **Nodi over the Internet.** Paired devices try a direct connection first and automatically fall back to an encrypted Cloudflare relay. The existing pinned TLS 1.3 runs inside the relay, which never sees file contents or text.
+- **Rooms** for first pairing across networks: one device creates a 16-character code (valid 5 minutes), the other joins, the host approves. Only a code digest and an AES-256-GCM blob reach the server.
+- Devices self-enroll with proof of possession of their certificate key; relay credentials are stored in AndroidKeyStore-encrypted storage or the macOS Keychain.
+- Opt-in, pseudonymous usage counters (off by default) and an in-app Feedback button.
+- Per-paired-device manual IPv4:port routing on Android and macOS for VPN/direct connections; Automatic resets the route. Android shows VPN IPv4 interfaces.
+
+### 🧪 Tests
+
+- Miniflare relay tests, Go relay/room tests and Kotlin ↔ Go interoperability, including public relay runs.
+- Physical acceptance on Mac (Wi-Fi) ↔ Galaxy S21 FE (mobile data): rooms both directions, files/text both ways, restart, cancellation, wrong and expired codes.
+
+### ⚠️ Limits
+
+- Internet files up to 16 MiB; receiving must stay enabled; up to 10 s polling delay.
+- Private-alpha relay capacity: 64 device identities, 16 simultaneous transfers.
+- Statistics opt-in behaviour has automated coverage only.
+
 ## 1.0.0-alpha.5 — 2026-11-03
 
 - Fix the Go CI matrix: exclude macOS + Go 1.22 inside `matrix`, keeping Go 1.22 coverage on Ubuntu and stable Go on both platforms.

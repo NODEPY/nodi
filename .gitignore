@@ -9,4 +9,5 @@ build/
 local.properties
 *.jks
 *.keystore
-nodi
+/nodi
+/.wrangler/

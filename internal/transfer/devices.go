@@ -336,3 +336,10 @@ func (b *DeviceBook) Commit(token string, finish func() error) error {
 	}
 	return errors.New("device access revoked")
 }
+
+// RememberInternet is called only after explicit room approval and authenticated
+// decryption of the peer identity using the out-of-band room code.
+func (b *DeviceBook) RememberInternet(p Peer) error {
+	b.mu.Lock()
+	return b.enrollLocked(p, false)
+}

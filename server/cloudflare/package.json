@@ -1,0 +1,21 @@
+{
+  "name": "nodi-relay-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "dev": "wrangler dev --local",
+    "check": "wrangler deploy --dry-run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0",
+    "wrangler": "4.157.0"
+  },
+  "overrides": {
+    "undici": "^7.30.1",
+    "sharp": "^0.35.5"
+  }
+}

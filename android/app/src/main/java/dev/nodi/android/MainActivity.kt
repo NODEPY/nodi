@@ -183,6 +183,7 @@ class MainActivity : Activity() {
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
         super.onCreate(savedInstanceState)
         deviceBook = NodiDeviceStore.get(this)
+        NodiMetrics.report(this,"active")
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false)
@@ -336,6 +337,9 @@ class MainActivity : Activity() {
         deviceActions.removeView(forgetButton);deviceHeader.addView(forgetButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(scanButton,8,dp(44))
+        deviceCard.addItem(button("Інтернет") { internetSettings() },8,dp(44))
+        deviceCard.addItem(button("Відгук / приватність") { feedbackSettings() },8,dp(44))
+        deviceCard.addItem(button("Адреса / VPN") { editEndpoint() },8,dp(44))
         connectionColumn.addItem(deviceCard, 16)
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
         connectTab = button("Підключення") { showTab(0) }
@@ -411,6 +415,7 @@ class MainActivity : Activity() {
                 status.text = "Зупиняю передачу…"
                 cancelBatch()
                 pairClient?.cancel()
+                roomThread?.interrupt()
             } else {
                 status.text = tr("Вибір файлів очищено")
             }
@@ -526,13 +531,14 @@ class MainActivity : Activity() {
             textStatus.text = friendlyError(error)
             return
         }
-        val session = NodiTransfer()
+        val session = NodiTransfer(NodiInternetStore.client(this))
         texting = true; transfer = session; batchCancelled = false
         textStatus.text = "Надсилаю текст…"
         renderBusy()
         worker.execute {
             try {
                 session.sendText(invite, value) { update -> ui { textPhase(update) } }
+                NodiMetrics.report(this,"text")
                 ui {
                     texting = false; transfer = null
                     addTextEntry(value, incoming = false)
@@ -609,6 +615,62 @@ class MainActivity : Activity() {
         if (uri.host.isNullOrEmpty()) return null
         return uri
     }
+    private fun feedbackSettings() {
+        val input=EditText(this).apply{hint="Відгук автору (до 1000 символів)";filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}
+        val consent=android.widget.CheckBox(this).apply{text="Ділитися статистикою використання";isChecked=NodiMetrics.consent(this@MainActivity)}
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent)}
+        android.app.AlertDialog.Builder(this).setTitle("Відгук і приватність")
+            .setMessage("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів."+(if(BuildConfig.NODI_TEST_INSTALL)" Ця тестова збірка не враховується." else ""))
+            .setView(box).setPositiveButton("Надіслати відгук"){_,_->
+                NodiMetrics.consent(this,consent.isChecked)
+                val text=input.text.toString().trim()
+                if(text.isNotEmpty())Thread({try{NodiInternetStore.ensure(this).api("POST","/v1/feedback",org.json.JSONObject().put("text",text));ui{status.text="Відгук надіслано"}}catch(_:Exception){ui{status.text="Відгук не надіслано · спробуй пізніше"}}},"Nodi-feedback").start()
+            }.setNeutralButton("Зберегти"){_,_->NodiMetrics.consent(this,consent.isChecked);NodiMetrics.report(this,"active")}
+            .setNegativeButton("Закрити",null).show()
+    }
+    @Volatile private var roomThread:Thread?=null
+    private fun internetSettings() {
+        if(roomThread!=null){android.app.AlertDialog.Builder(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
+            .setPositiveButton("Скасувати кімнату"){_,_->roomThread?.interrupt()}.setNegativeButton("Залишити",null).show();return}
+        if(busy || texting || pairing || scanning)return
+        val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true}
+        android.app.AlertDialog.Builder(this).setTitle("Інтернет · кімната")
+            .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.")
+            .setView(input).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
+            .setNeutralButton("Приєднатися"){_,_->internetRoom(input.text.toString())}
+            .setNegativeButton("Закрити",null).show()
+    }
+    private fun internetRoom(code:String?) {
+        pairing=true;renderBusy();status.text="Підключаю інтернет…"
+        roomThread=Thread({
+            try {
+                val client=NodiInternetStore.ensure(this)
+                ui{receiverService?.refreshInternet()}
+                val own=NodiIdentity.create(persistent=true).use{identity->org.json.JSONObject()
+                    .put("fingerprint",java.security.MessageDigest.getInstance("SHA-256").digest(identity.certificate.encoded).hex())
+                    .put("name","Nodi Android")}
+                if(Thread.currentThread().isInterrupted)throw InterruptedException()
+                val rooms=NodiRooms(client)
+                val save:(TrustedDevice)->Unit={peer->deviceBook.remember(peer)}
+                if(code==null)rooms.host(own,{value->ui{
+                    status.text="Код кімнати: $value"
+                    android.app.AlertDialog.Builder(this).setTitle("Код кімнати").setMessage("$value\n\nПередай код іншій людині. Залиш Nodi відкритим.")
+                        .setPositiveButton("Скопіювати"){_,_->(getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Nodi room",value))}
+                        .setNegativeButton("Закрити",null).show()
+                }},{name,value->
+                    val answer=java.util.concurrent.atomic.AtomicBoolean(false);val latch=java.util.concurrent.CountDownLatch(1)
+                    ui{android.app.AlertDialog.Builder(this).setTitle("Підключити $name?").setMessage("Код кімнати: $value\nПідтверджуй лише очікуваний пристрій.")
+                        .setPositiveButton("Підключити"){_,_->answer.set(true);latch.countDown()}
+                        .setNegativeButton("Відхилити"){_,_->latch.countDown()}.setOnCancelListener{latch.countDown()}.show()}
+                    latch.await(60,java.util.concurrent.TimeUnit.SECONDS)&&answer.get()
+                },save)
+                else {ui{status.text="Очікую підтвердження власника кімнати…"};rooms.join(code,own,save)}
+                ui{status.text="Пристрій підключено · увімкни приймання";receiverService?.refreshInternet()}
+            }catch(e:Exception){ui{status.text="Не вдалося підключитися";detail.text=e.message ?: "Спробуй новий код кімнати"}}
+            finally{roomThread=null;ui{pairing=false;renderBusy()}}
+        },"Nodi-room").apply{start()}
+    }
+
     private fun parseSelectedInvite(): NodiInvite {
         val invite = NodiInvite.parse(code.text.toString())
         require(deviceBook.list().any { peer -> peer.token == invite.token && peer.fingerprint == invite.fingerprint.hex() }) {
@@ -854,12 +916,13 @@ class MainActivity : Activity() {
             try {
                 for((index,file) in files.withIndex()) {
                     if(batchCancelled)throw CancellationException()
-                    val session=NodiTransfer();transfer=session
+                    val session=NodiTransfer(NodiInternetStore.client(this));transfer=session
                     if(batchCancelled){session.cancel();throw CancellationException()}
                     session.send(invite,file.name,file.size,cacheDir,
                         openSource={contentResolver.openInputStream(file.uri) ?: throw IOException("Не вдалося прочитати вибраний файл.")},
                         onProgress={update -> ui {showProgress(update);detail.text="${index+1}/${files.size} · ${file.name}\n${detail.text}"}})
                     sent++
+                    NodiMetrics.report(this,"file")
                 }
             } catch(error:Exception){failure=error}
             ui {
@@ -1008,7 +1071,7 @@ class MainActivity : Activity() {
         receiverProgress.isIndeterminate = receiverState.total == 0L || receiverState.status.startsWith("Перевіряю")
         if (receiverState.total > 0) receiverProgress.progress =
             (receiverState.bytes * 1000 / receiverState.total).coerceIn(0, 1000).toInt()
-        receiverStatus.text = if (choosingFolder) "Перевіряю папку…" else receiverState.status
+        receiverStatus.text = if (choosingFolder) "Перевіряю папку…" else receiverState.status + if(receiverState.internet.isNotEmpty()) " · "+receiverState.internet else ""
         receiverDetail.text = (if (receiverState.status.startsWith("Очікую")) "Лише підключені пристрої · до 1 год" else receiverState.detail) + if (receiverState.transferring && receiverState.total > 0)
             "\n${formatBytes(receiverState.bytes)} / ${formatBytes(receiverState.total)}" else ""
     }
@@ -1132,13 +1195,16 @@ class MainActivity : Activity() {
         val values = stored.mapNotNull { peer ->
             try {
                 val found = nearbyAll.firstOrNull { it.pin == peer.fingerprint }
-                val invite = NodiInvite.parse(peer.code())
-                NearbyDevice(found?.name ?: peer.name, found?.host ?: invite.host, found?.port ?: invite.port, peer.fingerprint)
+                val manual = manualEndpoint(peer.fingerprint)
+                val invite = NodiInvite.parse(peer.code(manual ?: peer.address))
+                NearbyDevice(found?.name ?: peer.name,
+                    if (manual != null) invite.host else found?.host ?: invite.host,
+                    if (manual != null) invite.port else found?.port ?: invite.port, peer.fingerprint)
             } catch (_: Exception) { null }
         }
         val ownPin=runCatching {NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex()}.getOrNull()
         val allValues=(values+nearbyAll.filter {found -> found.pin!=ownPin && stored.none {it.fingerprint==found.pin}}).distinctBy {it.pin}
-        val titles = allValues.map { "${it.name} · " + when {stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");else -> tr("не знайдено")} }
+        val titles = allValues.map { "${it.name} · " + when {manualEndpoint(it.pin) != null && stored.any { p -> p.fingerprint == it.pin } -> tr("Адреса вручну");stored.none {p -> p.fingerprint==it.pin} -> tr("Потрібне підключення");nearbyAll.any {found -> found.pin==it.pin} -> tr("у мережі");NodiInternetStore.client(this)!=null -> "Спробуємо через інтернет";else -> tr("не знайдено")} }
         if (allValues != nearby || titles != nearbyTitles) {
             nearby = allValues; nearbyTitles = titles
             nearbyPicker.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, titles) {
@@ -1192,6 +1258,48 @@ class MainActivity : Activity() {
                 dialog.show()
             }
     }
+    private fun manualEndpoint(pin: String): String? = getSharedPreferences("nodi_endpoints", MODE_PRIVATE)
+        .getString(pin, null)?.let { runCatching { NodiEndpoint.normalize(it) }.getOrNull() }
+
+    private fun editEndpoint() {
+        if (busy || selecting || scanning || pairing) return
+        val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
+        val peer = deviceBook.list().firstOrNull { it.fingerprint == device?.pin }
+        val own = receiverState.invites.joinToString("\n") { it.address }
+        val instructions = tr("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") +
+            "\n\n" + tr("Адреси цього пристрою:") + "\n" + own.ifEmpty { tr("Увімкни приймання, щоб побачити адресу.") }
+        if (peer == null) {
+            android.app.AlertDialog.Builder(this).setTitle(tr("Адреса / VPN"))
+                .setMessage(instructions).setPositiveButton(tr("Готово"), null).show()
+            return
+        }
+        val input = EditText(this).apply {
+            isSingleLine = true
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            hint = "100.64.0.2:7331"
+            filters = arrayOf(InputFilter.LengthFilter(64))
+            setText(manualEndpoint(peer.fingerprint) ?: peer.address)
+        }
+        val dialog = android.app.AlertDialog.Builder(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
+            .setMessage(instructions).setView(input)
+            .setPositiveButton(tr("Зберегти"), null)
+            .setNeutralButton(tr("Автоматично")) { _, _ ->
+                getSharedPreferences("nodi_endpoints", MODE_PRIVATE).edit().remove(peer.fingerprint).apply()
+                renderNearby()
+            }.setNegativeButton(tr("Скасувати"), null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val endpoint = runCatching { NodiEndpoint.normalize(input.text.toString()) }.getOrNull()
+                if (endpoint == null) { input.error = tr("Введи IPv4:порт, наприклад 100.64.0.2:7331"); return@setOnClickListener }
+                if (busy || selecting || scanning || pairing || deviceBook.list().none { it.fingerprint == peer.fingerprint }) return@setOnClickListener
+                getSharedPreferences("nodi_endpoints", MODE_PRIVATE).edit().putString(peer.fingerprint, endpoint).apply()
+                renderNearby()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun fillSelectedDevice() {
         if (!::code.isInitialized || busy || pairing) return
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition)
@@ -1202,7 +1310,7 @@ class MainActivity : Activity() {
         if(peer==null || device==null){code.setText("");return}
         val host = device.host.hostAddress ?: return
         val address = if (host.contains(':')) "[$host]:${device.port}" else "$host:${device.port}"
-        code.setText(peer.code(address))
+        code.setText(peer.code(manualEndpoint(peer.fingerprint) ?: address))
     }
     private fun pairNearby(pin: String? = null, initiatedHere: Boolean = true) {
         if (busy || selecting || scanning || pairing) return
@@ -1558,6 +1666,8 @@ class MainActivity : Activity() {
         super.onStop()
     }
     override fun onDestroy() {
+        roomThread?.interrupt()
+        roomThread = null
         alive = false
         pairClient?.cancel()
         cancelBatch()

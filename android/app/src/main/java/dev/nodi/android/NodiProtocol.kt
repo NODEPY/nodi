@@ -83,7 +83,7 @@ class ReceiverRejected(message: String) : IOException(message)
 const val MAX_TEXT_BYTES = 64 * 1024
 
 /** One instance per upload. cancel() may safely be called from the UI thread. */
-class NodiTransfer {
+class NodiTransfer(private val internet: NodiInternet? = null) {
     companion object { const val MAX_BYTES = 2L * 1024 * 1024 * 1024 }
     private val cancelled = AtomicBoolean(false)
     private val timedOut = AtomicBoolean(false)
@@ -161,7 +161,7 @@ class NodiTransfer {
             checkActive()
             val checksum = hash.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
             progress(TransferPhase.CONNECTING, force = true)
-            val socket = connect(invite)
+            val socket = connect(invite, snapshot.length())
             socket.use {
                 val output = socket.outputStream
                 val input = BufferedInputStream(socket.inputStream)
@@ -204,7 +204,7 @@ class NodiTransfer {
         }
     }
     /** Pinned TLS 1.3 channel. The certificate is verified before any secret is sent. */
-    private fun connect(invite: NodiInvite): SSLSocket {
+    private fun connect(invite: NodiInvite, size:Long=0): SSLSocket {
         val trust = object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
@@ -220,12 +220,19 @@ class NodiTransfer {
         }
         val context = SSLContext.getInstance("TLS")
         context.init(null, arrayOf<TrustManager>(trust), SecureRandom())
-        val socket = track(context.socketFactory.createSocket() as SSLSocket)
+        var raw = track(java.net.Socket())
+        try { raw.connect(InetSocketAddress(invite.host,invite.port),4_000) }
+        catch(error:IOException) {
+            raw.close();checkActive()
+            val relay=internet ?: throw error
+            if(size>16L*1024*1024)throw IOException("Інтернет-альфа: файл має бути не більшим за 16 MiB")
+            raw=track(relay.dial(invite.fingerprint.hex()){checkActive()})
+        }
+        val socket = track(context.socketFactory.createSocket(raw,invite.host.hostAddress,invite.port,true) as SSLSocket)
         try {
             require("TLSv1.3" in socket.supportedProtocols) { "Для цієї версії Nodi потрібен Android 10 або новіший." }
             socket.enabledProtocols = arrayOf("TLSv1.3")
             socket.soTimeout = 30_000
-            socket.connect(InetSocketAddress(invite.host, invite.port), 10_000)
             socket.startHandshake()
             checkActive()
             return socket

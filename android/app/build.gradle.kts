@@ -3,6 +3,7 @@ plugins {
 }
 
 android {
+    buildFeatures { buildConfig = true }
     namespace = "dev.nodi.android"
     compileSdk {
         version = release(37)
@@ -12,8 +13,9 @@ android {
         applicationId = "dev.nodi.android"
         minSdk = 29
         targetSdk = 37
-        versionCode = 5
-        versionName = "1.0.0-alpha.5"
+        buildConfigField("boolean", "NODI_TEST_INSTALL", providers.gradleProperty("nodiTestInstall").orElse("true").get())
+        versionCode = 6
+        versionName = "1.0.0-alpha.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -33,6 +35,7 @@ android {
 }
 
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)

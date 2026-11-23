@@ -117,6 +117,11 @@ final class CoreTask {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw NSError(domain: "Nodi", code: 2, userInfo: [NSLocalizedDescriptionKey: "Не знайдено Go-ядро. Запусти scripts/run-macos.sh повторно."])
         }
+        var environment=ProcessInfo.processInfo.environment
+        environment.removeValue(forKey:"NODI_RELAY_TOKEN");environment.removeValue(forKey:"NODI_RELAY_PIN")
+        if let relay=NodiInternet.load(){environment["NODI_RELAY_TOKEN"]=relay["token"];environment["NODI_RELAY_PIN"]=relay["fingerprint"]}
+        environment["NODI_TEST_INSTALL"] = (Bundle.main.object(forInfoDictionaryKey:"NodiTestInstall") as? Bool ?? true) ? "1" : "0"
+        process.environment=environment
         process.executableURL = executable
         process.arguments = arguments
         let output = Pipe()
@@ -273,6 +278,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var batchSent=0
     private var activeSendPin: String?
     private var pendingQR = false
+    private var restartForInternet = false
+    private var pendingInternetCommand: (String,String?)? = nil
+    private var roomActive=false
     private var stopping = false
     private var sendConfirmed = false
     private var sendCancelled = false
@@ -366,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.wire(self.pasteTextButton, #selector(pasteText)); self.wire(self.sendTextButton, #selector(sendText))
         self.devicePicker.target = self; self.devicePicker.action = #selector(deviceChanged)
         self.addressPicker.target = self; self.addressPicker.action = #selector(addressChanged)
+        let internet = NodiButton(title:"Інтернет",target:self,action:#selector(internetSettings));internet.bezelStyle = .rounded
         let refresh = NodiButton(title: "Знайти у Wi-Fi", target: self, action: #selector(refreshDevices)); refresh.bezelStyle = .rounded
         let open = NodiButton(title: "Відкрити", target: self, action: #selector(openInbox)); open.bezelStyle = .rounded
         self.folderLabel.stringValue = self.inbox.lastPathComponent; self.folderLabel.toolTip = self.inbox.path; self.folderLabel.lineBreakMode = .byTruncatingMiddle
@@ -385,7 +394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.font = .systemFont(ofSize: 13); self.sendStatus.textColor = .secondaryLabelColor
         self.fileLabel.font = .systemFont(ofSize: 15, weight: .medium)
         self.devicePicker.controlSize = .large; self.devicePicker.heightAnchor.constraint(equalToConstant:38).isActive=true
-        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([self.addButton, NSView(), self.forgetButton]), self.deviceHint])
+        let endpointButton = NodiButton(title: "Адреса / VPN", target: self, action: #selector(editEndpoint)); endpointButton.bezelStyle = .rounded
+        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([internet, self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
         let network = NodiButton(title: "Мережа…", target: self, action: #selector(showNetwork)); network.bezelStyle = .rounded
         let receive = self.card([self.label("Отримати", size: 15, bold: true), self.receiveStatus, self.receiveButton, self.folderLabel, self.row([self.folderButton,open,network])])
         self.receiveStatus.maximumNumberOfLines=2
@@ -409,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsButton=NodiButton(title:"Параметри",target:self,action:#selector(settings));settingsButton.bezelStyle = .rounded
         self.symbol(settingsButton,"gearshape");settingsButton.toolTip=NodiL("Параметри");settingsButton.setAccessibilityLabel(NodiL("Параметри"));settingsButton.title=""
         settingsButton.widthAnchor.constraint(equalToConstant:36).isActive=true
-        let header=self.row([mark,title,NSView(),settingsButton])
+        let feedback=NodiButton(title:"Відгук",target:self,action:#selector(feedbackSettings));feedback.bezelStyle = .rounded
+        let header=self.row([mark,title,NSView(),feedback,settingsButton])
         let transfers=NSStackView(views:[send,receive]);transfers.orientation = .horizontal;transfers.alignment = .top;transfers.distribution = .fillEqually;transfers.spacing=16
         send.heightAnchor.constraint(equalTo:receive.heightAnchor).isActive=true
         let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
@@ -482,6 +493,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.activity.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.labelColor]))
         if self.activity.string.count > 20000 { self.activity.string = String(self.activity.string.suffix(12000)) }; self.activity.scrollToEndOfDocument(nil)
     }
+    private func manualEndpoint(_ pin: String) -> String? {
+        guard let value = self.preferences.string(forKey: "nodi.endpoint." + pin) else { return nil }
+        return NodiEndpoint.normalize(value)
+    }
+    @objc private func feedbackSettings() {
+        let alert=NSAlert();alert.messageText="Відгук і приватність"
+        alert.informativeText="Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів." + (NodiInternet.testInstall ? " Ця тестова збірка не враховується." : "")
+        let input=NSTextField(frame:NSRect(x:0,y:36,width:380,height:60));input.placeholderString="Відгук автору (до 1000 символів)"
+        let consent=NSButton(checkboxWithTitle:"Ділитися статистикою використання",target:nil,action:nil);consent.frame=NSRect(x:0,y:0,width:380,height:28);consent.state=UserDefaults.standard.bool(forKey:"nodi.usageConsent") ? .on : .off
+        let view=NSView(frame:NSRect(x:0,y:0,width:380,height:100));view.addSubview(input);view.addSubview(consent);alert.accessoryView=view
+        alert.addButton(withTitle:"Надіслати відгук");alert.addButton(withTitle:"Зберегти");alert.addButton(withTitle:"Закрити")
+        let result=alert.runModal();guard result != .alertThirdButtonReturn else{return}
+        UserDefaults.standard.set(consent.state == .on,forKey:"nodi.usageConsent");NodiInternet.usage("active")
+        if result == .alertFirstButtonReturn {
+            let text=input.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
+            guard !text.isEmpty && text.count<=1000 else{self.log("Відгук має містити від 1 до 1000 символів");return}
+            guard NodiInternet.load() != nil else{self.log("Спочатку підключи Інтернет у Nodi");return}
+            NodiInternet.request("/v1/feedback",payload:["text":text]){ok in DispatchQueue.main.async{self.log(ok ? "Відгук надіслано" : "Не вдалося надіслати відгук")}}
+        }
+    }
+    @objc private func internetSettings() {
+        if self.roomActive {
+            let alert=NSAlert();alert.messageText="Кімната активна";alert.informativeText="Скасувати очікування підключення?";alert.addButton(withTitle:"Залишити");alert.addButton(withTitle:"Скасувати кімнату")
+            if alert.runModal() == .alertSecondButtonReturn {self.pendingInternetCommand=nil;self.receiver?.command("room_cancel");self.roomActive=false};return
+        }
+        guard self.sender == nil && !self.stopping else{return}
+        let alert=NSAlert();alert.messageText="Інтернет · кімната"
+        alert.informativeText="Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл."
+        let input=NSTextField(frame:NSRect(x:0,y:0,width:360,height:28));input.placeholderString="XXXX-XXXX-XXXX-XXXX"
+        alert.accessoryView=input;alert.addButton(withTitle:"Створити кімнату");alert.addButton(withTitle:"Приєднатися");alert.addButton(withTitle:"Закрити")
+        let result=alert.runModal()
+        guard result != .alertThirdButtonReturn else{return}
+        self.roomActive=true
+        let type=result == .alertFirstButtonReturn ? "room_host" : "room_join"
+        if self.receiver == nil {self.pendingInternetCommand=(type,input.stringValue);self.toggleReceive()}
+        else {self.receiver?.command(type,address:input.stringValue)}
+    }
+
+    private func endpoint(for peer: SavedDevice) -> String {
+        return self.manualEndpoint(peer.fingerprint) ?? self.discovered.first(where: { $0.pin == peer.fingerprint })?.address ?? peer.address
+    }
+    @objc private func editEndpoint() {
+        guard self.sender == nil, !self.stopping, self.wifiAlert == nil else { return }
+        let alert = NSAlert(); alert.messageText = NodiL("Адреса / VPN")
+        alert.informativeText = NodiL("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") + "\n\n" + NodiL("Адреси цього пристрою:") + "\n" + (self.invites.isEmpty ? NodiL("Увімкни приймання, щоб побачити адресу.") : self.invites.map { $0.address }.joined(separator: "\n"))
+        guard let peer = self.selectedDevice() else {
+            alert.addButton(withTitle: NodiL("Готово")); alert.beginSheetModal(for: self.window) { _ in }; return
+        }
+        alert.messageText = peer.name + " · " + NodiL("Адреса / VPN")
+        let input = NSTextField(string: self.manualEndpoint(peer.fingerprint) ?? self.endpoint(for: peer))
+        input.frame = NSRect(x: 0, y: 0, width: 340, height: 26)
+        input.placeholderString = "100.64.0.2:7331"
+        alert.accessoryView = input
+        alert.addButton(withTitle: NodiL("Зберегти"))
+        alert.addButton(withTitle: NodiL("Автоматично"))
+        alert.addButton(withTitle: NodiL("Скасувати"))
+        alert.beginSheetModal(for: self.window) { [weak self] response in
+            guard let self = self, self.sender == nil, self.saved.contains(where: { $0.fingerprint == peer.fingerprint }) else { return }
+            if response == .alertSecondButtonReturn {
+                self.preferences.removeObject(forKey: "nodi.endpoint." + peer.fingerprint)
+            } else if response == .alertFirstButtonReturn {
+                guard let value = NodiEndpoint.normalize(input.stringValue) else {
+                    let invalid = NSAlert(); invalid.messageText = NodiL("Введи IPv4:порт, наприклад 100.64.0.2:7331")
+                    invalid.beginSheetModal(for: self.window) { _ in }; return
+                }
+                self.preferences.set(value, forKey: "nodi.endpoint." + peer.fingerprint)
+            } else { return }
+            self.renderDevices()
+        }
+    }
     private func selectedDevice() -> SavedDevice? {
         guard let pin = self.devicePicker.selectedItem?.representedObject as? String else {
             return nil
@@ -503,7 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         for peer in self.saved {
             let online = self.discovered.contains { $0.pin == peer.fingerprint }
-            let status = NodiL(online ? "у мережі" : "не знайдено")
+            let status = NodiL(self.manualEndpoint(peer.fingerprint) != nil ? "Адреса вручну" : (online ? "у мережі" : (NodiInternet.load() != nil ? "Інтернет доступний для спроби" : "не знайдено")))
             appendDevice((self.discovered.first(where: { $0.pin == peer.fingerprint })?.name ?? peer.name) + " · " + status, peer.fingerprint)
         }
         for peer in self.discovered {
@@ -529,7 +610,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.receiver?.command("wifi_select", pin: "*")
         }
         if let peer = self.selectedDevice() {
-            self.deviceHint.stringValue = self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : "Офлайн · увімкни приймання на телефоні"
+            self.deviceHint.stringValue = self.manualEndpoint(peer.fingerprint).map { NodiL("Адреса вручну") + " · " + $0 } ?? (self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : (NodiInternet.load() != nil ? "Спробуємо через інтернет · увімкни приймання" : "Офлайн · увімкни приймання на телефоні"))
         } else { self.deviceHint.stringValue = "Скануй новий QR телефоном" };self.setBusy(self.sender != nil)
     }
     @objc private func refreshDevices() { self.discoveryPromptPins.removeAll(); self.browser.refresh(); if self.receiver == nil { self.toggleReceive() } else { self.receiver?.command("wifi_select", pin: "*") } }
@@ -613,7 +694,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.closeWiFiAlert(); self.wifiArmedPin = nil
                     self.closeQR(); self.browser.advertise(nil); self.receiver = nil; self.invites = []; self.stopping = false; self.pendingQR = false
                     self.receiveStatus.stringValue = "Приймання вимкнене"; self.receiveButton.title = "Увімкнути приймання"; self.receiveButton.isEnabled = true; self.folderButton.isEnabled = true; self.setBusy(self.sender != nil)
-                    if let folder = self.pendingInbox {
+                    if self.restartForInternet {self.restartForInternet=false;self.toggleReceive()}
+                    else if let folder = self.pendingInbox {
                         self.pendingInbox = nil
                         self.applyInbox(folder)
                         self.toggleReceive()
@@ -628,10 +710,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.receiver?.command("wifi_request", pin: pin, address: peer.address)
             } else { self.receiver?.command("wifi_select", pin: "*") }
             self.updateInvites(event.invites ?? []); self.browser.advertise(self.invites.first)
+            NodiInternet.usage("active")
             self.receiveStatus.stringValue = "Увімкнено · лише твої пристрої"; self.receiveButton.title = "Зупинити"; self.receiveButton.isEnabled = true
             self.folderButton.isEnabled = true
             self.setBusy(self.sender != nil)
             if self.pendingQR { self.receiver?.command("new_qr") }
+            if let pending=self.pendingInternetCommand {self.pendingInternetCommand=nil;self.receiver?.command(pending.0,address:pending.1)}
             self.offerNearbyDevice()
         case "pair_request":
             if let prompt = self.discoveryPrompt {
@@ -673,6 +757,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.closeQR()
             self.offerNearbyDevice()
         case "forgotten": self.log("Пристрій видалено. Його попередній ключ більше не дозволяє надсилати сюди файли.")
+        case "internet_activation":
+            if let code=event.code {do{try NodiInternet.activate(code);NodiInternet.usage("active")}catch{self.log("Не вдалося зберегти інтернет-доступ у Keychain")}}
+        case "room_code":
+            if let code=event.code {
+                self.deviceHint.stringValue="Код кімнати: " + code + " · 5 хвилин"
+                let alert=NSAlert();alert.messageText="Код кімнати";alert.informativeText=code + "\n\nПередай іншій людині й залиш Nodi відкритим."
+                alert.addButton(withTitle:"Скопіювати");alert.addButton(withTitle:"Закрити")
+                if alert.runModal() == .alertFirstButtonReturn {NSPasteboard.general.clearContents();NSPasteboard.general.setString(code,forType:.string)}
+            }
+        case "room_closed": self.roomActive=false
+        case "room_connected": self.deviceHint.stringValue="Пристрій підключено через інтернет"
+        case "internet":
+            self.receiveStatus.stringValue=event.message ?? "Інтернет"
         case "received":
             if let path=event.path { self.showReceived(URL(fileURLWithPath:path)) }
             self.log("Збережено: \(URL(fileURLWithPath: event.path ?? "файл").lastPathComponent)")
@@ -766,7 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func sendFile() {
         guard self.sender==nil,let peer=self.selectedDevice() else{return}
         guard !self.selectedFiles.isEmpty else{self.chooseFile();return}
-        let address=self.discovered.first(where:{$0.pin==peer.fingerprint})?.address ?? peer.address
+        let address=self.endpoint(for: peer)
         guard let code=peer.code(address:address) else{return}
         self.pendingFiles=self.selectedFiles;self.batchTotal=self.pendingFiles.count;self.batchSent=0
         self.sendCancelled=false;self.sendingText=false;self.activeSendPin=peer.fingerprint
@@ -785,7 +882,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try task.start(arguments:["send","-json","-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
                 guard let self=self else{return}
-                if event.type=="sent"{self.sendConfirmed=true}
+                if event.type=="route"{self.sendStatus.stringValue="Інтернет · "+file.lastPathComponent}
+                else if event.type=="sent"{self.sendConfirmed=true;NodiInternet.usage("file")}
                 else if event.type=="error" || event.type=="fatal"{failure=event.message ?? NodiL("Помилка передачі")}
             },onExit:{[weak self] exitCode in
                 guard let self=self else{return}
@@ -840,7 +938,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.textStatus.stringValue = NodiL("Текст завеликий. Максимум — 64 КБ.")
             return
         }
-        let address = self.discovered.first(where: { $0.pin == peer.fingerprint })?.address ?? peer.address
+        let address = self.endpoint(for: peer)
         guard let code = peer.code(address: address),
               let payload = try? JSONSerialization.data(withJSONObject: ["code": code, "text": value]),
               let stdin = String(data: payload, encoding: .utf8) else { return }
@@ -860,6 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.sender = nil; self.sendingText = false; self.activeSendPin = nil
                 self.setBusy(false)
                 if status == 0 {
+                    NodiInternet.usage("text")
                     self.addTextEntry(value, incoming: false)
                     self.textInput.string = ""
                     self.textStatus.stringValue = NodiL("Текст надіслано")
@@ -1039,6 +1138,14 @@ func NodiL(_ original: String) -> String {
  return source
 }
 private let nodiWords: [String:[String]] = [
+"Зберегти": ["Save", "Сохранить"],
+"Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
+"Адреса вручну": ["Manual address", "Адрес вручную"],
+"Автоматично": ["Automatic", "Автоматически"],
+"Адреси цього пристрою:": ["This device’s addresses:", "Адреса этого устройства:"],
+"Увімкни приймання, щоб побачити адресу.": ["Enable receiving to see the address.", "Включи приём, чтобы увидеть адрес."],
+"Введи IPv4:порт, наприклад 100.64.0.2:7331": ["Enter IPv4:port, for example 100.64.0.2:7331", "Введи IPv4:порт, например 100.64.0.2:7331"],
+"Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.": ["Pair devices using QR or Wi-Fi first. Different networks need a VPN or direct access. Enter the other device’s IPv4:port; the port may change when its receiver restarts.", "Сначала свяжи устройства через QR или Wi-Fi. В разных сетях нужен VPN или прямой доступ. Введи IPv4:порт другого устройства; после перезапуска приёмника порт может измениться."],
 "Або перетягни файли сюди": ["Or drop files here", "Или перетащи файлы сюда"],
 "Текст і посилання":["Text and links", "Текст и ссылки"],
 "Вставити з буфера":["Paste from clipboard", "Вставить из буфера"],
@@ -1278,8 +1385,13 @@ final class NodiButton:NSButton {
 }
 
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.setActivationPolicy(.regular)
-app.delegate = delegate
-app.run()
+@main
+struct NodiApplication {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.setActivationPolicy(.regular)
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}

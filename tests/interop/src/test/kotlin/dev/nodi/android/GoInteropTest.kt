@@ -25,14 +25,22 @@ class GoInteropTest {
     private fun await(queue: LinkedBlockingQueue<JSONObject>): JSONObject =
         queue.poll(15, TimeUnit.SECONDS) ?: error("Timed out waiting for Go event")
 
-    private inner class GoReceiver : Closeable {
+    private inner class GoReceiver(storage:File?=null, relayToken:String?=null, ownPin:String?=null) : Closeable {
         val inbox = temp.newFolder()
         val events = LinkedBlockingQueue<JSONObject>()
-        private val process = ProcessBuilder(core, "receive", "-json", "-listen", "127.0.0.1:0",
-            "-out", inbox.absolutePath).redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        private val process = run {
+            val args=mutableListOf(core,"receive","-json","-listen","127.0.0.1:0","-out",inbox.absolutePath)
+            if(storage!=null)args.addAll(listOf("-devices",storage.absolutePath))
+            ProcessBuilder(args).apply {
+                if(relayToken!=null){environment()["NODI_RELAY_TOKEN"]=relayToken;environment()["NODI_RELAY_DIAGNOSTICS"]="1"}
+                if(ownPin!=null)environment()["NODI_RELAY_PIN"]=ownPin
+            }.redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        }
         private val reader = Thread {
             process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { events.put(JSONObject(it)) }
+                lines.forEach { val event=JSONObject(it)
+                    if(relayToken!=null && event.optString("type") in listOf("internet","error") && event.optString("message")!="Інтернет увімкнено")System.err.println(event.optString("message"))
+                    events.put(event) }
             }
         }.apply { isDaemon = true; start() }
         val code: String
@@ -41,6 +49,7 @@ class GoInteropTest {
             check(ready.getString("type") == "ready")
             code = ready.getJSONArray("invites").getJSONObject(0).getString("code")
         }
+        fun command(value:JSONObject){process.outputStream.write((value.toString()+"\n").toByteArray());process.outputStream.flush()}
         override fun close() {
             process.destroy()
             if (!process.waitFor(5, TimeUnit.SECONDS)) {
@@ -51,7 +60,7 @@ class GoInteropTest {
         }
     }
 
-    private fun go(command: String, code: String, file: File? = null, text: String = ""): Int {
+    private fun go(command: String, code: String, file: File? = null, text: String = "", relayToken: String? = null): Int {
         val args = mutableListOf(core, command, "-json")
         val input = if (command == "send-text") {
             args.add("-stdin")
@@ -61,10 +70,18 @@ class GoInteropTest {
             code
         }
         val output = temp.newFile()
-        val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
+        val builder = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output)
+        if(relayToken!=null)builder.environment()["NODI_RELAY_TOKEN"]=relayToken
+        val process=builder.start()
         try {
             process.outputStream.bufferedWriter().use { it.write(input) }
-            check(process.waitFor(15, TimeUnit.SECONDS)) { "Go sender timed out" }
+            check(process.waitFor(if(relayToken==null)15 else 60, TimeUnit.SECONDS)) { "Go sender timed out" }
+            if(process.exitValue()!=0 && relayToken!=null) {
+                output.readLines().forEach { line ->
+                    val event=runCatching{JSONObject(line)}.getOrNull()
+                    if(event?.optString("type") in listOf("error","fatal"))System.err.println("Relay Go failure: "+event?.optString("message"))
+                }
+            }
             return process.exitValue()
         } finally {
             if (process.isAlive) {
@@ -98,6 +115,8 @@ class GoInteropTest {
         val book = DeviceBook(File(temp.newFolder(), "devices.json"))
         val peerPin = "a".repeat(64)
         private val token = "b".repeat(64)
+        lateinit var certificate:X509Certificate
+        lateinit var privateKey:PrivateKey
         val receiver: NodiReceiver
         val code: String
         private val worker: Thread
@@ -124,7 +143,9 @@ class GoInteropTest {
                     return incoming.name
                 }
             }
-            receiver = NodiReceiver(keys.getKey("test", "test-password".toCharArray()) as PrivateKey,
+            certificate=keys.getCertificate("test") as X509Certificate
+            privateKey=keys.getKey("test", "test-password".toCharArray()) as PrivateKey
+            receiver = NodiReceiver(privateKey,
                 keys.getCertificate("test") as X509Certificate, cache, store, {},
                 bindAddress = "127.0.0.1", devices = if (trusted) book else null,
                 onText = { texts.put(it) })
@@ -139,6 +160,131 @@ class GoInteropTest {
             worker.join(5000)
             assertFalse("Kotlin receiver did not stop", worker.isAlive)
             assertEquals("Receive snapshots must be removed", 0, cache.listFiles()!!.size)
+        }
+    }
+
+    /** Opt-in real deployed relay test; no account secrets are stored in source. */
+    @Test(timeout=180000) fun publicRelayKotlinGoFilesAndTextBothDirections() {
+        val adminToken=System.getenv("NODI_TEST_RELAY_ADMIN")
+        org.junit.Assume.assumeTrue("Requires explicitly enabled remote smoke test", !adminToken.isNullOrEmpty())
+        val admin=NodiInternet(adminToken!!)
+        val registered=mutableListOf<String>()
+        try {
+            val storage=temp.newFolder()
+            val goPin=GoReceiver(storage).use { NodiInvite.parse(it.code).fingerprint.hex() }
+            KotlinReceiver().use { kotlinReceiver ->
+                val k=NodiInvite.parse(kotlinReceiver.code)
+                fun register(pin:String):String {
+                    val token=admin.api("POST","/v1/admin/devices",JSONObject().put("id",pin)).getString("token")
+                    registered.add(pin);return token
+                }
+                val goToken=register(goPin);val kotlinToken=register(k.fingerprint.hex())
+                val goPairToken="c".repeat(64)
+                File(storage,"devices.json").writeText(org.json.JSONArray().put(JSONObject()
+                    .put("name","Kotlin").put("address","127.0.0.1:1").put("fingerprint",k.fingerprint.hex()).put("token",goPairToken)).toString())
+                val kotlinRelay=NodiInternet(kotlinToken,diagnostic={System.err.println("Kotlin: "+it)})
+                kotlinRelay.api("PUT","/v1/peers/$goPin")
+                GoReceiver(storage,goToken,goPin).use { goReceiver ->
+                    fun next(type:String):JSONObject {
+                        val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(40)
+                        while(System.nanoTime()<until){val event=goReceiver.events.poll(1,TimeUnit.SECONDS)?:continue;if(event.optString("type")==type)return event}
+                        error("Missing Go event: $type")
+                    }
+                    assertEquals("Інтернет увімкнено",next("internet").getString("message"))
+                    val toGo=TrustedDevice("Go","127.0.0.1:1",goPin,goPairToken).code()
+                    val toKotlin=TrustedDevice("Kotlin","127.0.0.1:1",k.fingerprint.hex(),k.token).code()
+                    kotlinRelay.receive(k.port,{listOf(goPin)},{}).use {
+                        val data=ByteArray(180000){(it%251).toByte()}
+                        send(toGo,"relay-kotlin.bin",data,NodiTransfer(kotlinRelay))
+                        next("received")
+                        assertArrayEquals(data,File(goReceiver.inbox,"relay-kotlin.bin").readBytes())
+                        NodiTransfer(kotlinRelay).sendText(NodiInvite.parse(toGo),"Kotlin → Go через інтернет")
+                        assertEquals("Kotlin → Go через інтернет",next("text_received").getString("text"))
+                        val file=File(temp.newFolder(),"relay-go.bin").apply{writeBytes(data)}
+                        assertEquals(0,go("send",toKotlin,file,relayToken=goToken))
+                        assertArrayEquals(data,File(kotlinReceiver.inbox,"relay-go.bin").readBytes())
+                        assertEquals(0,go("send-text",toKotlin,text="Go → Kotlin через інтернет",relayToken=goToken))
+                        assertEquals("Go → Kotlin через інтернет",kotlinReceiver.texts.poll(15,TimeUnit.SECONDS))
+                    }
+                }
+            }
+        } finally {for(pin in registered)admin.api("DELETE","/v1/admin/devices/$pin")}
+    }
+
+    @Test(timeout=240000) fun publicRoomEnrollmentAndBidirectionalTransfer() {
+        val adminToken=System.getenv("NODI_TEST_RELAY_ADMIN")
+        org.junit.Assume.assumeTrue(!adminToken.isNullOrEmpty())
+        val admin=NodiInternet(adminToken!!);val registered=mutableListOf<String>()
+        val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val storage=temp.newFolder()
+            val goPin=GoReceiver(storage).use{NodiInvite.parse(it.code).fingerprint.hex()};registered.add(goPin)
+            GoReceiver(storage).use { goReceiver ->
+                fun next(type:String):JSONObject {
+                    val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(60)
+                    while(System.nanoTime()<until){val e=goReceiver.events.poll(1,TimeUnit.SECONDS)?:continue
+                        if(e.optString("type")=="error")error(e.optString("message"))
+                        if(e.optString("type")==type)return e}
+                    error("Missing event: $type")
+                }
+                KotlinReceiver(trusted=true).use { receiver ->
+                    val pin=receiver.receiver.fingerprint;registered.add(pin)
+                    val api=NodiInternet("")
+                    val nonce=api.api("POST","/v1/enroll/challenge",JSONObject().put("id",pin)).getString("nonce")
+                    val signature=java.security.Signature.getInstance("SHA256withECDSA").apply{initSign(receiver.privateKey);update("nodi-enroll-v1\n$pin\n$nonce".toByteArray())}.sign()
+                    val result=api.api("POST","/v1/enroll",JSONObject().put("id",pin).put("nonce",nonce)
+                        .put("certificate",Base64.getEncoder().encodeToString(receiver.certificate.encoded))
+                        .put("signature",Base64.getEncoder().encodeToString(signature)).put("testInstall",true))
+                    val relay=NodiInternet(result.getString("token"))
+                    goReceiver.command(JSONObject().put("type","room_host"))
+                    val activation=next("internet_activation").getString("code").removePrefix("nodi-internet1-")
+                    val goToken=JSONObject(String(Base64.getUrlDecoder().decode(activation))).getString("token")
+                    val room=next("room_code").getString("code")
+                    val joined=executor.submit {NodiRooms(relay).join(room,JSONObject().put("fingerprint",pin).put("name","Kotlin room test")){receiver.book.remember(it)}}
+                    val request=next("pair_request");assertEquals(room,request.getString("compare"))
+                    goReceiver.command(JSONObject().put("type","pair_response").put("id",request.getString("id")).put("allow",true))
+                    joined.get(40,TimeUnit.SECONDS);next("room_connected")
+                    // Reverse room ownership to exercise Kotlin host and Go join too.
+                    val roomCodes=LinkedBlockingQueue<String>()
+                    val hosting=executor.submit {NodiRooms(relay).host(JSONObject().put("fingerprint",pin).put("name","Kotlin host"),{roomCodes.put(it)},{_,_->true}){receiver.book.remember(it)}}
+                    val reverseCode=roomCodes.poll(15,TimeUnit.SECONDS)?:error("Kotlin room did not open")
+                    goReceiver.command(JSONObject().put("type","room_join").put("address",reverseCode))
+                    next("room_connected");hosting.get(30,TimeUnit.SECONDS)
+                    val peer=receiver.book.list().first{it.fingerprint==goPin}
+                    val toGo=peer.code("127.0.0.1:1")
+                    val toKotlin=TrustedDevice("Kotlin","127.0.0.1:1",pin,peer.token).code()
+                    relay.receive(receiver.receiver.port,{listOf(goPin)},{}).use{
+                        val bytes=ByteArray(220000){(it%239).toByte()}
+                        send(toGo,"room-kotlin.bin",bytes,NodiTransfer(relay));next("received")
+                        assertArrayEquals(bytes,File(goReceiver.inbox,"room-kotlin.bin").readBytes())
+                        NodiTransfer(relay).sendText(NodiInvite.parse(toGo),"Room Kotlin → Go");assertEquals("Room Kotlin → Go",next("text_received").getString("text"))
+                        val file=File(temp.newFolder(),"room-go.bin").apply{writeBytes(bytes)}
+                        assertEquals(0,go("send",toKotlin,file,relayToken=goToken));assertArrayEquals(bytes,File(receiver.inbox,"room-go.bin").readBytes())
+                        assertEquals(0,go("send-text",toKotlin,text="Room Go → Kotlin",relayToken=goToken));assertEquals("Room Go → Kotlin",receiver.texts.poll(15,TimeUnit.SECONDS))
+                    }
+                }
+            }
+        }finally{executor.shutdownNow();for(pin in registered)admin.api("DELETE","/v1/admin/devices/$pin")}
+    }
+
+    @Test(timeout = 60000) fun manualEndpointPreservesTrustForFilesAndText() {
+        GoReceiver().use { receiver ->
+            val actual = NodiInvite.parse(receiver.code)
+            val peer = TrustedDevice("Go", "192.0.2.1:1", actual.fingerprint.hex(), actual.token)
+            val endpoint = NodiEndpoint.normalize("127.0.0.1:${actual.port}")
+            val code = peer.code(endpoint)
+            val routed = NodiInvite.parse(code)
+            assertArrayEquals(actual.fingerprint, routed.fingerprint)
+            assertEquals(actual.token, routed.token)
+            assertEquals("192.0.2.1:1", peer.address)
+            send(code, "vpn.bin", byteArrayOf(1, 2, 3))
+            assertEquals("received", await(receiver.events).getString("type"))
+            assertArrayEquals(byteArrayOf(1, 2, 3), File(receiver.inbox, "vpn.bin").readBytes())
+            NodiTransfer().sendText(routed, "manual route")
+            assertEquals("manual route", await(receiver.events).getString("text"))
+            assertThrows(java.io.IOException::class.java) { send(changed(code, "fingerprint"), "bad.bin", byteArrayOf(4)) }
+            assertEquals("error", await(receiver.events).getString("type"))
+            assertFalse(File(receiver.inbox, "bad.bin").exists())
         }
     }
 

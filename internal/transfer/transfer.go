@@ -54,9 +54,11 @@ type Progress struct {
 // Invite is a secret, temporary capability: anyone holding it can send files.
 // Share it only with the intended sender through a trusted channel.
 type Invite struct {
-	Address     string `json:"address"`
-	Token       string `json:"token"`
-	Fingerprint string `json:"fingerprint"`
+	// Fallback is used only after TCP dial failure, never after TLS or delivery.
+	Fallback    func() (net.Conn, error) `json:"-"`
+	Address     string                   `json:"address"`
+	Token       string                   `json:"token"`
+	Fingerprint string                   `json:"fingerprint"`
 }
 
 func (i Invite) Encode() string {
@@ -417,7 +419,21 @@ func dialPinned(invite Invite) (*tls.Conn, error) {
 			return nil
 		},
 	}
-	return tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", invite.Address, config)
+	raw, err := net.DialTimeout("tcp", invite.Address, 4*time.Second)
+	if err != nil && invite.Fallback != nil {
+		raw, err = invite.Fallback()
+	}
+	if err != nil {
+		return nil, err
+	}
+	secure := tls.Client(raw, config)
+	_ = secure.SetDeadline(time.Now().Add(15 * time.Second))
+	if err = secure.Handshake(); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	_ = secure.SetDeadline(time.Time{})
+	return secure, nil
 }
 
 // SendText delivers one clipboard payload to a paired device. The token,

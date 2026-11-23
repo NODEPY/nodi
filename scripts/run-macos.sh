@@ -15,10 +15,21 @@ if ! xcrun --find swiftc >/dev/null 2>&1; then
     echo 'Після завершення встановлення повтори: bash scripts/run-macos.sh' >&2
     exit 1
 fi
-sdk_path="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+# xcrun may pick the newest macOS SDK, which can be incompatible with the
+# installed Swift toolchain (SDK 27 vs Swift 6.3.3). Prefer the known-good SDK
+# when it is installed, unless the caller set SDKROOT explicitly.
+preferred_sdk=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
+if [ -n "${SDKROOT:-}" ]; then
+    sdk_path="$SDKROOT"
+elif [ -d "$preferred_sdk" ]; then
+    sdk_path="$preferred_sdk"
+else
+    sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+fi
+echo "macOS SDK: $sdk_path"
 module_cache="$(mktemp -d "${TMPDIR:-/tmp}/nodi-swift-cache.XXXXXX")"
 trap 'rm -rf "$module_cache"' EXIT
-app_dir="$project_dir/build/Nodi.app"
+app_dir="${NODI_APP_DIR:-$project_dir/build/Nodi.app}"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 case "$(uname -m)" in
     arm64) go_arch=arm64; swift_target=arm64-apple-macos12.0 ;;
@@ -31,8 +42,9 @@ echo '2/3 · Збираю нативне вікно…'
 xcrun swiftc -swift-version 5 -O -target "$swift_target" \
     -sdk "$sdk_path" \
     -module-cache-path "$module_cache" \
-    -framework AppKit -framework QuartzCore -framework UniformTypeIdentifiers -framework ImageIO -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreImage macos/Nodi.swift -o "$app_dir/Contents/MacOS/Nodi"
+    -framework AppKit -framework QuartzCore -framework UniformTypeIdentifiers -framework ImageIO -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreImage macos/Nodi.swift macos/NodiEndpoint.swift macos/NodiInternet.swift -o "$app_dir/Contents/MacOS/Nodi"
 cp macos/Info.plist "$app_dir/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :NodiTestInstall bool ${NODI_TEST_INSTALL:-true}" "$app_dir/Contents/Info.plist"
 cp macos/Nodi.icns "$app_dir/Contents/Resources/Nodi.icns"
 cp android/app/src/main/assets/NodiMark.png "$app_dir/Contents/Resources/NodiMark.png"
 plutil -lint "$app_dir/Contents/Info.plist"

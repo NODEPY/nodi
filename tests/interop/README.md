@@ -14,6 +14,9 @@ Gradle downloads Kotlin, JUnit and a JVM implementation of `org.json` on first u
 
 Coverage:
 
+- Strict numeric manual IPv4 endpoint validation, and manual-route file/text sending
+  preserving the saved token/certificate pin (including wrong-pin rejection).
+
 - Empty and 1 MiB binary files, Unicode filenames, byte-for-byte verification,
   duplicate-name rejection preserving original contents, in both directions.
 - Unicode text/links and the exact 64 KiB UTF-8 boundary in both directions;
@@ -32,3 +35,10 @@ The receiver uses a test filesystem adapter instead of Storage Access Framework,
 and fresh JVM-generated keys instead of AndroidKeyStore. Android TLS providers,
 UI, service lifecycle, clipboard, mDNS, Wi-Fi pairing approval, revocation during
 an active transfer, and physical-device/network behavior still need separate tests.
+
+The opt-in `publicRelayKotlinGoFilesAndTextBothDirections` test requires
+`NODI_TEST_RELAY_ADMIN` in the environment. It registers two temporary identities
+on the configured public relay, forces LAN connection failure, sends 180,000-byte
+files and Unicode text in both directions using production Go/Kotlin relay
+clients, and deletes registrations in `finally`. Never put the admin token in
+source or command-line arguments. Run this only against an authorized deployment.
