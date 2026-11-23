@@ -14,30 +14,33 @@
 
 ---
 
-## Meet Alpha 5
+## Meet Alpha 6 — Nodi over the Internet
 
-Connect over Wi-Fi, confirm the matching code and start sharing. QR pairing stays
-available as an alternative. Android now has dedicated **Connections**, **Receive**,
-**Send** and **Text** tabs, with refreshed received-file cards and Open/Share actions.
-The Text tab sends a snippet or link to the paired device; received text is copied
-to the clipboard and kept in an in-memory history with Copy and Open actions.
+Your Mac and phone no longer need to share a network. Create an encrypted **room**
+on one device, enter its 16-character code on the other and approve the connection.
+After that, paired devices send files and text over Wi-Fi when they can and through
+the encrypted Internet relay when they cannot — no IP addresses, ports or VPN.
+The relay only forwards end-to-end TLS traffic: it never sees file contents or text.
+Manual IPv4/VPN routes remain available for advanced setups.
 
 | Connect | Transfer | Stay in control |
 | --- | --- | --- |
+| Pair across networks with a room code | Automatic LAN or Internet route | Approve every room join |
 | Discover devices on your LAN | Send multiple files in sequence | Confirm a new connection |
 | Start pairing from either device | Send text and links from the clipboard | Cancel selection or transfer |
 | Keep QR as an alternative | Choose your destination folder | Remove saved devices |
 | Confirm on either screen | Preview received images on Android | Copy or open received text |
 
-**Experimental alpha:** LAN discovery; manual IPv4 routes for paired devices over a reachable VPN;
-development builds add an encrypted Internet relay with rooms. No independent security audit.
+**Experimental alpha:** LAN discovery, encrypted Internet relay with rooms and manual IPv4/VPN routes.
+No independent security audit.
 See the known limitations and test status below before relying on a build.
 
 ## Quick start
 
-1. Install Nodi on your Mac and Android phone and connect both to the same local network.
-2. Open Nodi on both devices. Find the other device over Wi-Fi and start connecting.
-3. Compare the displayed codes and confirm on both screens, or scan the Mac QR on Android.
+1. Install Nodi on your Mac and Android phone.
+2. Open Nodi on both devices. On the same Wi-Fi, find the other device and start connecting;
+   on different networks, create a room in **Інтернет** on one device and join with its code on the other.
+3. Compare the displayed codes and confirm, or scan the Mac QR on Android.
 4. On the receiving device, choose a folder and enable receiving. Select files on the sender.
    Text and links do not need a destination folder; use the Text tab on Android or the
    text card on Mac.
@@ -48,11 +51,11 @@ The macOS archive contains `Nodi.app`; current builds are ad-hoc signed, not not
 
 ## Versioning
 
-This source version is **1.0.0-alpha.5** (tag `v1.0.0-alpha.5`).
+This source version is **1.0.0-alpha.6** (tag `v1.0.0-alpha.6`).
 See Downloads for published builds.
 Use `MAJOR.MINOR.PATCH-alpha.N` for prereleases and `MAJOR.MINOR.PATCH` for stable releases.
-Android `versionName` matches the release version; `versionCode` increases for each distributed build (this build: 5).
-macOS uses numeric `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 7`;
+Android `versionName` matches the release version; `versionCode` increases for each distributed build (this build: 6).
+macOS uses numeric `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 8`;
 its release tag identifies the alpha. Increase the build number for each distributed build.
 Go **1.22** is the minimum language/toolchain requirement in `go.mod`, not the app version.
 Go 1.23.2 in earlier testing notes described a test environment, not a separate requirement.
@@ -61,6 +64,8 @@ Use a maintained Go toolchain for release builds; minimum-version compatibility 
 ## Features
 
 - QR pairing and Wi-Fi pairing with comparison-code confirmation; mDNS discovery.
+- Internet rooms for first pairing across networks; automatic relay fallback for paired devices.
+- Optional manual IPv4:port route per paired device for VPN setups.
 - A connection request can start on either device; the other shows a confirmation prompt.
 - Android tabs: Connections, Receive, Send and Text.
 - Discovery and pairing do not require an Android destination folder; receiving files does.
@@ -93,17 +98,17 @@ On Mac the destination can be changed while the receiver is running; the receive
 
 ## Limitations
 
-In alpha.5 release builds, cross-network transfer requires an existing VPN or reachable IPv4/TCP route.
-Development builds add an Internet relay (see below); it has no NAT traversal or offline delivery,
-limits Internet files to 16 MiB and has not yet been tested on physical devices.
-Without rooms, initial pairing uses QR/Wi-Fi. No folder transfer, resume or remote file browsing.
+Over the Internet: up to 16 MiB per file and 10 minutes per session; receiving must stay enabled
+and polling can add up to 10 seconds of delay. The private-alpha relay accepts up to 64 device
+identities and 16 simultaneous transfers. No NAT traversal or offline delivery.
+No folder transfer, resume or remote file browsing.
 Text history is kept in memory only and is lost when the app closes.
 The Go receiver requires a destination filesystem supporting hard links (for example APFS;
 FAT/exFAT do not). Android uses a document-provider folder and has separate permission semantics.
 macOS builds are ad-hoc signed, not notarized; Android alpha builds use debug signing.
 For known test gaps and the device checklist, see [TESTING.md](TESTING.md).
 
-## Manual address / VPN (development version)
+## Manual address / VPN
 
 Pair devices first, connect your VPN, then select a saved device → **Address / VPN**.
 Enter the other receiver's IPv4 address and current port. This route is saved and
@@ -111,7 +116,7 @@ used for both files and text; **Automatic** restores discovery-based routing.
 The dialog also shows this device's receiver addresses. No new trust is granted
 by entering an address. See [setup and limits](docs/VPN-ADDRESS.md).
 
-## Internet rooms (development version)
+## Internet rooms
 
 When a direct TCP connection fails, paired devices automatically use the
 Cloudflare relay. The existing pinned TLS runs inside it, so the relay never
@@ -120,6 +125,11 @@ sees file contents or text. To pair across networks, create a room in the
 join with it on the other device and approve the request on the host. Codes
 expire after five minutes. See [Internet alpha](docs/INTERNET-ALPHA.md) and the
 [relay server](server/cloudflare/README.md).
+
+Privacy: the relay operator (Cloudflare and the Nodi author) can see device IDs, IP
+addresses, timing and traffic size, but not contents. Usage statistics are off by
+default and only daily pseudonymous counters are sent if you opt in. The Feedback
+button sends your text to the author.
 
 ## Sharing from other apps
 
