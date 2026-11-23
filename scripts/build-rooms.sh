@@ -5,18 +5,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_dir"
 
-# xcrun may pick the newest macOS SDK, which can be incompatible with the
-# installed Swift toolchain. Prefer the known-good SDK unless the caller chose one.
-preferred_sdk=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
-if [ -z "${SDKROOT:-}" ]; then
-    if [ -d "$preferred_sdk" ]; then
-        export SDKROOT="$preferred_sdk"
-        echo "Using macOS SDK: $SDKROOT"
-    else
-        echo "Warning: $preferred_sdk not found; using the default xcrun SDK." >&2
-        echo "If the macOS build fails, set SDKROOT to a compatible SDK." >&2
-    fi
-fi
+# The macOS SDK is selected by scripts/run-macos.sh (SDKROOT overrides it).
 
 for variant in test public; do
     if [ "$variant" = test ]; then

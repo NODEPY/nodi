@@ -15,7 +15,18 @@ if ! xcrun --find swiftc >/dev/null 2>&1; then
     echo 'Після завершення встановлення повтори: bash scripts/run-macos.sh' >&2
     exit 1
 fi
-sdk_path="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+# xcrun may pick the newest macOS SDK, which can be incompatible with the
+# installed Swift toolchain (SDK 27 vs Swift 6.3.3). Prefer the known-good SDK
+# when it is installed, unless the caller set SDKROOT explicitly.
+preferred_sdk=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
+if [ -n "${SDKROOT:-}" ]; then
+    sdk_path="$SDKROOT"
+elif [ -d "$preferred_sdk" ]; then
+    sdk_path="$preferred_sdk"
+else
+    sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+fi
+echo "macOS SDK: $sdk_path"
 module_cache="$(mktemp -d "${TMPDIR:-/tmp}/nodi-swift-cache.XXXXXX")"
 trap 'rm -rf "$module_cache"' EXIT
 app_dir="${NODI_APP_DIR:-$project_dir/build/Nodi.app}"
