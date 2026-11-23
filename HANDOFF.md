@@ -1,3 +1,46 @@
+# Physical acceptance checkpoint (2026-11-23)
+
+Branch `codex/internet-relay`, on top of `2337974`. No merge, release, tag,
+version bump, deploy or Worker change.
+
+## Physical-device result
+
+- Scenarios 1–8 in `docs/INTERNET-ALPHA.md` PASSED, reported by the owner:
+  Mac on Wi-Fi ↔ S21 FE on mobile data (Wi-Fi off, no VPN/manual address).
+  Rooms both directions, files/text both ways, restart persistence,
+  cancellation, wrong and expired codes.
+- Scenarios 9–10 (test/public statistics) remain NOT RUN: they need
+  `node scripts/internet-report.mjs`, and Node is not installed (the former
+  `/private/tmp/node-v22.23.4-…` copy is gone). Miniflare tests also need Node.
+
+## Builds used
+
+`bash scripts/build-rooms.sh` on 2026-11-23 (no SDKROOT; script picked
+MacOSX26.sdk). Android APKs are byte-identical to 2026-11-06
+(test `32f009cd…a6db`, public `10ec9c06…aeff`), same debug cert `c14152d8…b7`,
+1.0.0-alpha.5 / 5. macOS ZIPs rebuilt: test `b3c0cd24…4e70`
+(`NodiTestInstall=true`), public `3bf77afc…a19` (`false`); codesign strict PASS;
+no secret paths in archives.
+
+## Same-day checks and cleanups
+
+- `go vet`, `go test -race -count=1 ./...`: PASS. Android
+  `assembleDebug testDebugUnitTest`: PASS. Interop forced rerun: 9 PASS,
+  2 public tests skipped (no admin token supplied).
+- Root `.gitignore` rule `nodi` → `/nodi`; new files under `cmd/nodi/` and
+  `dev/nodi/` no longer need `git add -f`. Root `nodi` binary deleted.
+- SDK auto-selection moved into `scripts/run-macos.sh` (used by build-rooms).
+- README, `docs/INTERNET-RELAY.md`, server README enrollment section updated
+  to reflect the deployed relay, rooms and self-enrollment.
+
+## Remaining
+
+- Scenarios 9–10 after installing Node ≥22.
+- Optional `/v1/rooms/join` quota (see proposal below) requires a Worker deploy.
+- No GitHub release; download counters stay 503 until configured.
+
+---
+
 # Review checkpoint — ready for physical acceptance (2026-11-06)
 
 Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
