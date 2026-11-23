@@ -2,10 +2,14 @@
 
 The Cloudflare private-alpha server now lives in
 [server/cloudflare](../server/cloudflare/README.md). It implements HTTPS/WSS,
-operator-issued device credentials, mutual peer grants, presence, single-use
-participant-bound tickets, revocation, hibernating sockets and bounded framing.
-See that README for the API, local tests, deployment instructions and limits.
-It has not been deployed or integrated into Android/macOS.
+self-enrolled device credentials, encrypted rooms, mutual peer grants, presence,
+single-use participant-bound tickets, revocation, hibernating sockets and bounded
+framing. See that README for the API, local tests, deployment instructions and limits.
+It is deployed (private alpha) and integrated into the Go core, Android and
+macOS: clients try a direct TCP connection first and fall back to the relay
+only on TCP failure. Encrypted rooms handle first-time pairing over the
+Internet; see [INTERNET-ALPHA.md](INTERNET-ALPHA.md) for usage and the
+physical-device test checklist (not yet run).
 
 The Go experiment below is preserved as historical context. Its TCP protocol
 is different from the Cloudflare WebSocket protocol and is not a public server.

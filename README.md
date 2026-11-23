@@ -29,7 +29,8 @@ to the clipboard and kept in an in-memory history with Copy and Open actions.
 | Keep QR as an alternative | Choose your destination folder | Remove saved devices |
 | Confirm on either screen | Preview received images on Android | Copy or open received text |
 
-**Experimental alpha:** LAN discovery; manual IPv4 routes for paired devices over a reachable VPN. No independent security audit.
+**Experimental alpha:** LAN discovery; manual IPv4 routes for paired devices over a reachable VPN;
+development builds add an encrypted Internet relay with rooms. No independent security audit.
 See the known limitations and test status below before relying on a build.
 
 ## Quick start
@@ -73,8 +74,9 @@ Use a maintained Go toolchain for release builds; minimum-version compatibility 
 
 macOS: macOS 12+, Go 1.22+ and Xcode Command Line Tools.
 Run `bash scripts/run-macos.sh`.
-The script detects the active macOS SDK with `xcrun` and uses a fresh compiler cache.
-If your compiler and default SDK differ, set `SDKROOT` to a compatible installed SDK.
+The script prefers `MacOSX26.sdk` from Command Line Tools when installed (newer SDKs can be
+incompatible with the installed Swift), otherwise uses the `xcrun` default, and uses a fresh
+compiler cache. Set `SDKROOT` to override the SDK.
 
 Android: minSdk 29, compileSdk/targetSdk 37. Open `android/` in Android Studio,
 or run `bash ./gradlew assembleDebug` inside that directory with Android SDK and compatible JDK installed.
@@ -91,8 +93,10 @@ On Mac the destination can be changed while the receiver is running; the receive
 
 ## Limitations
 
-Cross-network transfer requires an existing VPN or reachable IPv4/TCP route; no built-in relay or NAT traversal.
-Initial pairing still uses QR/Wi-Fi. No folder transfer, resume or remote file browsing.
+In alpha.5 release builds, cross-network transfer requires an existing VPN or reachable IPv4/TCP route.
+Development builds add an Internet relay (see below); it has no NAT traversal or offline delivery,
+limits Internet files to 16 MiB and has not yet been tested on physical devices.
+Without rooms, initial pairing uses QR/Wi-Fi. No folder transfer, resume or remote file browsing.
 Text history is kept in memory only and is lost when the app closes.
 The Go receiver requires a destination filesystem supporting hard links (for example APFS;
 FAT/exFAT do not). Android uses a document-provider folder and has separate permission semantics.
@@ -106,6 +110,16 @@ Enter the other receiver's IPv4 address and current port. This route is saved an
 used for both files and text; **Automatic** restores discovery-based routing.
 The dialog also shows this device's receiver addresses. No new trust is granted
 by entering an address. See [setup and limits](docs/VPN-ADDRESS.md).
+
+## Internet rooms (development version)
+
+When a direct TCP connection fails, paired devices automatically use the
+Cloudflare relay. The existing pinned TLS runs inside it, so the relay never
+sees file contents or text. To pair across networks, create a room in the
+**Інтернет** section on one device, share the 16-character code privately,
+join with it on the other device and approve the request on the host. Codes
+expire after five minutes. See [Internet alpha](docs/INTERNET-ALPHA.md) and the
+[relay server](server/cloudflare/README.md).
 
 ## Sharing from other apps
 
@@ -125,8 +139,8 @@ python3 scripts/check-core.py
 bash android/gradlew -p tests/interop test --no-daemon
 ```
 
-See [CLI documentation](docs/CLI.md). Windows, Linux desktop apps, automatic cross-network
-connections without a VPN, folder transfer and resume remain roadmap items.
+See [CLI documentation](docs/CLI.md). Windows, Linux desktop apps, NAT traversal,
+offline delivery, folder transfer and resume remain roadmap items.
 
 ## License
 

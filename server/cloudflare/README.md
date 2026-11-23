@@ -58,13 +58,16 @@ are rejected. Health contains no credentials or device information.
 
 ## Enrollment and trust
 
-This is a closed alpha, not a public signup service. The operator provisions
-one random relay credential per device via the admin API and delivers it to
-that device securely. ADMIN_TOKEN must NEVER be bundled in the apps. Device
-IDs are the existing 64-character lowercase certificate fingerprints. The
-operator must verify the association when enrolling; an ID alone is not proof
-of identity. The relay credential is separate from the existing Nodi pairing
-secret and must be stored using the platform secure credential store.
+Devices self-enroll: the app requests a one-use, 60-second challenge for its
+certificate pin and signs it with the matching EC private key
+(`/v1/enroll/challenge`, `/v1/enroll`). The server returns a random relay
+credential only after verifying that proof of possession; revoked identities
+cannot re-enroll. The operator can still provision or revoke a device via the
+admin API, but ADMIN_TOKEN must NEVER be bundled in the apps. Device IDs are
+the existing 64-character lowercase certificate fingerprints. Enrollment proves
+key possession, not who owns the device. The relay credential is separate from
+the existing Nodi pairing secret and is stored in AndroidKeyStore-encrypted
+storage or the macOS Keychain.
 
 After existing authenticated local pairing, each app explicitly grants the
 other device relay access. Both grants must exist. The server authorizes routes;
