@@ -9,7 +9,9 @@
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Android-6366f1)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[Downloads](https://github.com/NODEPY/nodi/releases) · [What's new](CHANGELOG.md) · [Testing](TESTING.md) · [CLI](docs/CLI.md) · [Security](SECURITY.md)
+<p><a href="https://nodi-relay.igor-shura2011faik.workers.dev/download/android"><strong>⬇ Android APK</strong></a> · <a href="https://nodi-relay.igor-shura2011faik.workers.dev/download/macos"><strong>⬇ macOS (Apple Silicon)</strong></a></p>
+
+[All releases](https://github.com/NODEPY/nodi/releases) · [What's new](CHANGELOG.md) · [Testing](TESTING.md) · [CLI](docs/CLI.md) · [Security](SECURITY.md)
 </div>
 
 ---

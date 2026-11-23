@@ -1,3 +1,21 @@
+# Alpha 6 release and download counter (2026-11-23)
+
+- Released `v1.0.0-alpha.6` (pre-release, tag on main `158aade`, PR #3; PR #2 merged
+  with it). Public builds: Android 1.0.0-alpha.6 / 6, macOS build 8. Assets,
+  manifest, report and checksums in `build/releases/alpha.6/` and on GitHub.
+- Worker deployed with user approval: code version `29fb6983-…`, then
+  `DOWNLOAD_ANDROID_URL` / `DOWNLOAD_MACOS_URL` secrets → active version
+  `922c63d7-3b19-4a68-9d92-38adda9b4917`. `/download/android|macos` → 302 to the
+  alpha.6 assets (both return 200); `/download/test/*` not counted.
+- Owner exclusion: `node scripts/internet-report.mjs` prints the owner link; it sets an
+  HttpOnly `nodi_owner` cookie for /download. Bots/CLI user agents are not counted.
+  Verified live: owner link 200 + cookie, wrong link 404. Owner must open the link
+  on each device/browser; never commit or publish it.
+- Each future release must update both DOWNLOAD_*_URL secrets.
+- Node 26 installed via Homebrew; Miniflare 26/26 PASS on it.
+
+---
+
 # Physical acceptance checkpoint (2026-11-23)
 
 Branch `codex/internet-relay`, on top of `2337974`. No merge, release, tag,
