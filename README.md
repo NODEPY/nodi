@@ -72,13 +72,33 @@ flowchart LR
 
 ## Quick start
 
-1. Install Nodi on your Mac and Android phone.
+1. Install Nodi on your Mac ([see below](#install-on-macos)) and Android phone.
 2. **Same Wi-Fi:** tap **Find on Wi-Fi**, pick the other device and confirm the matching code on both screens.<br>
    **Different networks:** tap **Internet → Create room** on one device and **Join** with that code on the other.
 3. On the receiving device choose a folder and turn on receiving. Pick files on the sender — or use the **Text** tab for snippets and links.
 
 > [!TIP]
-> Install the Android APK over an existing installation to keep your paired devices. The Mac app is not notarized yet: right-click `Nodi.app` → **Open** the first time.
+> Install the Android APK over an existing installation to keep your paired devices. Android may ask you to allow installs from your browser or file manager the first time.
+
+## Install on macOS
+
+The Mac app is ad-hoc signed and **not notarized yet**, so macOS blocks it when it comes from a browser download. Pick one of these:
+
+**Option 1 — one command (recommended).** In Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NODEPY/nodi/main/scripts/install-macos.sh | bash
+```
+
+[The script](scripts/install-macos.sh) downloads the latest release, checks its SHA-256 against `SHA256SUMS.txt`, installs `Nodi.app` into `/Applications` and starts it. Run the same command to update; your paired devices are kept.
+
+**Option 2 — the ZIP from the Download button.** Unzip it and move `Nodi.app` to Applications, then:
+
+- **macOS 15 Sequoia and newer:** open Nodi once (macOS will refuse), then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the Nodi message, and confirm.
+- **macOS 12–14:** right-click `Nodi.app` → **Open** → **Open**.
+- Or remove the download flag in Terminal: `xattr -dr com.apple.quarantine /Applications/Nodi.app`
+
+Apple Silicon (M1 or newer) and macOS 12+ are required.
 
 ## Features
 
