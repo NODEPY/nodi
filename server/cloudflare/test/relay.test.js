@@ -336,3 +336,27 @@ test('download redirects count separately; test links, owner browsers and bots a
   assert.deepEqual(Object.values(stats.downloadRequests),[{android:2,macos:0}]);
  }finally{await isolated.dispose();}
 });
+
+test('long-poll: wakes on a new session, times out empty, keeps presence, opt-in only',async()=>{
+ const isolated=new Miniflare({modules:true,scriptPath:decodeURIComponent(new URL('../src/worker.js',import.meta.url).pathname),compatibilityFlags:['nodejs_compat'],script:await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),compatibilityDate:'2026-08-06',durableObjects:{HUB:{className:'RelayHub',useSQLite:true}},bindings:{ADMIN_TOKEN:admin,LONG_POLL_MS:'1500'}});
+ try {
+  const req=(path,token,method='GET',data,headers={})=>isolated.dispatchFetch('https://relay.test'+path,{method,headers:{Authorization:'Bearer '+token,...(data?{'Content-Type':'application/json'}:{}),...headers},body:data?JSON.stringify(data):undefined});
+  const make=async()=>{const r=await req('/v1/admin/devices',admin,'POST',{id:fresh()});assert.equal(r.status,201);return r.json();};
+  const a=await make(),b=await make();
+  for(const [x,y] of [[a,b],[b,a]])assert.equal((await req('/v1/peers/'+y.id,x.token,'PUT')).status,200);
+  const wait={'X-Nodi-Wait':'1'};
+  // Without the header the inbox answers at once, as for Alpha 6-8 clients.
+  let t=Date.now();assert.deepEqual((await (await req('/v1/incoming',b.token)).json()).sessions,[]);assert.ok(Date.now()-t<1000);
+  // With the header and nothing to deliver it holds until the timeout, then returns empty.
+  t=Date.now();assert.deepEqual((await (await req('/v1/incoming',b.token,'GET',undefined,wait)).json()).sessions,[]);assert.ok(Date.now()-t>=1400,'held for the long-poll window');
+  // A waiting receiver counts as online and is woken as soon as a session is created for it.
+  t=Date.now();const pending=req('/v1/incoming',b.token,'GET',undefined,wait);
+  await new Promise(r=>setTimeout(r,200));
+  const peers=await (await req('/v1/peers',a.token)).json();assert.equal(peers.peers.find(p=>p.id===b.id).online,true);
+  const created=await req('/v1/sessions',a.token,'POST',{peer:b.id});assert.equal(created.status,201);const session=await created.json();
+  const got=await (await pending).json();assert.ok(Date.now()-t<1300,'woken before the timeout');
+  assert.equal(got.sessions.length,1);assert.equal(got.sessions[0].id,session.id);assert.equal(got.sessions[0].from,a.id);
+  // A third device's sessions never wake or reach b.
+  const c=await make();assert.equal((await req('/v1/sessions',c.token,'POST',{peer:b.id})).status,403);
+ } finally { await isolated.dispose(); }
+});

@@ -2,7 +2,12 @@ import { X509Certificate, verify, createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 // Private-alpha relay. Device credentials are provisioned by the operator.
 // TLS with the existing device certificate pin MUST run inside binary frames.
-const MAX_DEVICES = 64, MAX_SESSIONS = 16, MAX_FRAME = 64 * 1024;
+const MAX_DEVICES = 1000, MAX_SESSIONS = 32, MAX_FRAME = 64 * 1024;
+// Receivers that send `X-Nodi-Wait: 1` are held on /v1/incoming until a session arrives
+// or LONG_POLL_MS passes, which cuts requests ~5x versus 10-second polling. Presence
+// covers the hold plus a margin. Neither presence nor rate counters are persisted, so
+// polling writes no Durable Object rows (the free plan allows 100,000 rows written/day).
+const LONG_POLL_MS = 50_000, PRESENCE_MS = 75_000;
 const MAX_BYTES = 64 * 1024 * 1024, WAIT_MS = 30_000, LIFE_MS = 600_000;
 const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
 const secret = () => hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -49,7 +54,11 @@ export default {
 };
 
 export class RelayHub {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+  constructor(ctx, env) {
+    this.ctx = ctx; this.env = env;
+    // Ephemeral state: lost on restart by design (rate windows and presence refill quickly).
+    this.mem = {rates: new Map(), seen: new Map(), waiters: new Map(), wake: new Set(), adminRate: null, publicRate: null, alarmAt: undefined};
+  }
   async load() {
     // Cache survives requests in this object; persist bounded records separately
     // rather than growing one value beyond Durable Object's value-size limit.
@@ -73,10 +82,9 @@ export class RelayHub {
     const next=new Map();
     for(const group of ['devices','sessions','rooms','challenges','metrics','downloads','revoked'])for(const [id,value]of Object.entries(s[group]||{}))next.set('v2:'+group+':'+id,value);
     for(const f of s.feedback){f.id ||= secret();f.created ||= Date.now();next.set('v2:feedback:'+f.id,f);}
-    for(const key of ['adminRate','publicRate'])if(s[key])next.set('v2:meta:'+key,s[key]);
     const changed=[...next].filter(([k,v])=>JSON.stringify(this.persisted.get(k))!==JSON.stringify(v));
     const removed=[...this.persisted.keys()].filter(k=>!next.has(k));
-    await this.ctx.storage.transaction(async tx=>{
+    if(changed.length||removed.length||this.legacy) await this.ctx.storage.transaction(async tx=>{
       for(let i=0;i<changed.length;i+=128)await tx.put(Object.fromEntries(changed.slice(i,i+128)));
       for(let i=0;i<removed.length;i+=128)await tx.delete(removed.slice(i,i+128));
       if(this.legacy){await tx.put('legacy-v1-backup',this.legacy);await tx.put('state',{format:2});}
@@ -84,7 +92,9 @@ export class RelayHub {
     this.persisted=new Map([...next].map(([k,v])=>[k,structuredClone(v)]));this.legacy=null;
     const deadlines=[...Object.values(s.sessions),...Object.values(s.rooms),...Object.values(s.challenges)].map(x=>x.deadline);
     if(Object.keys(s.metrics).length||Object.keys(s.downloads).length||s.feedback.length)deadlines.push((Math.floor(Date.now()/86400000)+1)*86400000);
-    if(deadlines.length)await this.ctx.storage.setAlarm(Math.min(...deadlines));else await this.ctx.storage.deleteAlarm();
+    // Each setAlarm/deleteAlarm is a written row, so only touch the alarm when its time changes.
+    const alarmAt=deadlines.length?Math.min(...deadlines):null;
+    if(alarmAt!==this.mem.alarmAt){if(alarmAt===null)await this.ctx.storage.deleteAlarm();else await this.ctx.storage.setAlarm(alarmAt);this.mem.alarmAt=alarmAt;}
   }
   sockets(id) { return this.ctx.getWebSockets(id); }
   send(ws, data) {try {ws.send(data);return true;} catch {return false;}}
@@ -113,18 +123,33 @@ export class RelayHub {
     if (request.method === 'POST') {
       try { payload = await body(request, ['/v1/enroll','/v1/rooms','/v1/rooms/join','/v1/feedback'].includes(path) ? 4096 : 1024); } catch { return fail(400, 'invalid_request'); }
     }
-    return this.ctx.blockConcurrencyWhile(async () => {
+    const run = () => this.ctx.blockConcurrencyWhile(async () => {
       const s = await this.load(); this.prune(s);
       const result = await this.route(request, s, payload);
-      await this.save(s); return result;
+      await this.save(s);
+      for (const id of this.mem.wake) this.mem.waiters.get(id)?.();
+      this.mem.wake.clear();
+      return result;
     });
+    const first = await run();
+    if (path !== '/v1/incoming' || request.method !== 'GET' || request.headers.get('X-Nodi-Wait') !== '1' || !admission.me || first.status !== 200) return first;
+    if ((await first.clone().json()).sessions.length) return first;
+    // Hold outside the object lock; a new session for this device (or a newer wait) wakes it.
+    await new Promise(resolve => {
+      const waiters = this.mem.waiters, me = admission.me;
+      waiters.get(me)?.();
+      const timer = setTimeout(wake, Number(this.env.LONG_POLL_MS) || LONG_POLL_MS); // env override is for tests
+      function wake() { clearTimeout(timer); if (waiters.get(me) === wake) waiters.delete(me); resolve(); }
+      waiters.set(me, wake);
+    });
+    return run();
   }
   async publicAdmission(request,s) {
     if(request.method!=='POST' && !(request.method==='GET' && new URL(request.url).pathname.startsWith('/download/')))return fail(405,'method_not_allowed');
     const minute=Math.floor(Date.now()/60000);
-    if(s.publicRate?.minute!==minute)s.publicRate={minute,count:0,ips:{}};
+    const rate=(this.mem.publicRate?.minute===minute)?this.mem.publicRate:(this.mem.publicRate={minute,count:0,ips:{}});
     const ip=await hash(request.headers.get('CF-Connecting-IP') || 'local');
-    if(++s.publicRate.count>100 || (s.publicRate.ips[ip]=(s.publicRate.ips[ip]||0)+1)>12)return fail(429,'rate_limit');
+    if(++rate.count>100 || (rate.ips[ip]=(rate.ips[ip]||0)+1)>12)return fail(429,'rate_limit');
     return {public:true};
   }
   async enroll(request,s,payload) {
@@ -161,8 +186,8 @@ export class RelayHub {
       if (digest !== await hash(this.env.ADMIN_TOKEN)) return fail(401,'unauthorized');
       if (charge) {
         const now = Date.now();
-        if (!s.adminRate || now - s.adminRate.start >= 60_000) s.adminRate = {start:now, count:0};
-        if (++s.adminRate.count > 120) return fail(429,'rate_limit');
+        if (!this.mem.adminRate || now - this.mem.adminRate.start >= 60_000) this.mem.adminRate = {start:now, count:0};
+        if (++this.mem.adminRate.count > 120) return fail(429,'rate_limit');
       }
       return {admin:true};
     }
@@ -171,8 +196,9 @@ export class RelayHub {
     const [me, device] = found;
     if (charge) {
       const minute = Math.floor(Date.now()/60_000);
-      if (device.minute !== minute) {device.minute=minute; device.requests=0;}
-      if (++device.requests > 120) return fail(429,'rate_limit');
+      let rate = this.mem.rates.get(me);
+      if (rate?.minute !== minute) this.mem.rates.set(me, rate = {minute, requests: 0});
+      if (++rate.requests > 120) return fail(429,'rate_limit');
     }
     return {me, device};
   }
@@ -279,10 +305,10 @@ export class RelayHub {
       return json({ok:true});
     }
     if (path==='/v1/peers' && method==='GET') {
-      return json({peers:device.peers.filter(id=>s.devices[id]?.peers.includes(me)).map(id=>({id,online:Date.now()-(s.devices[id].lastSeen || 0)<45_000}))});
+      return json({peers:device.peers.filter(id=>s.devices[id]?.peers.includes(me)).map(id=>({id,online:this.mem.waiters.has(id)||Date.now()-(this.mem.seen.get(id)||0)<PRESENCE_MS}))});
     }
     if (path==='/v1/incoming' && method==='GET') {
-      device.lastSeen=Date.now();
+      this.mem.seen.set(me,Date.now());
       return json({sessions:Object.entries(s.sessions).filter(([,r])=>r.receiver===me && !r.usedReceiver).map(([id,r])=>({id,from:r.sender,ticket:r.receiverTicket,expiresAt:r.deadline}))});
     }
     if (path==='/v1/sessions' && method==='POST') {
@@ -292,6 +318,7 @@ export class RelayHub {
       if (rooms.length>=MAX_SESSIONS || rooms.filter(r=>[r.sender,r.receiver].includes(me)).length>=2 || rooms.filter(r=>[r.sender,r.receiver].includes(peer)).length>=2) return fail(429,'session_limit');
       const id=secret(), ticket=secret();
       s.sessions[id]={sender:me,receiver:peer,senderHash:await hash(ticket),receiverTicket:secret(),usedSender:false,usedReceiver:false,deadline:Date.now()+WAIT_MS,bytes:0,messages:0};
+      this.mem.wake.add(peer); // woken after save(), so the receiver sees the stored session
       return json({id,ticket,expiresAt:s.sessions[id].deadline},201);
     }
     const sessionPath = path.match(/^\/v1\/sessions\/([a-f0-9]{64})$/);
@@ -318,20 +345,26 @@ export class RelayHub {
   webSocketMessage(ws,message) {
     return this.ctx.blockConcurrencyWhile(async()=>{
       const s=await this.load(); this.prune(s);
-      const {id,me}=ws.deserializeAttachment(), r=s.sessions[id];
+      // Per-frame counters live in each socket's attachment (kept across hibernation, never
+      // written to storage), so forwarding a transfer writes no Durable Object rows.
+      const mine=ws.deserializeAttachment(), {id,me}=mine, r=s.sessions[id];
       if (!r) {ws.close(1000,'expired');await this.save(s);return;}
       const peers=this.sockets(id).filter(x=>x.deserializeAttachment().me!==me);
-      if (++r.messages>4096 || typeof message==='string' || message.byteLength>MAX_FRAME || !r.usedSender || !r.usedReceiver || peers.length!==1) this.end(s,id,'invalid_frame');
+      const theirs=peers.length===1 ? peers[0].deserializeAttachment() : null;
+      const messages=(mine.messages||0)+1;
+      if (messages+(theirs?.messages||0)>4096 || typeof message==='string' || message.byteLength>MAX_FRAME || !r.usedSender || !r.usedReceiver || !theirs) this.end(s,id,'invalid_frame');
+      else if (message.byteLength===0) {
+        // Only one chunk may be in flight in each direction. An empty frame acknowledges
+        // the peer's chunk; a slow reader therefore bounds the sender's queue.
+        if (!theirs.pending) this.end(s,id,'unexpected_ack');
+        else {
+          ws.serializeAttachment({...mine,messages}); peers[0].serializeAttachment({...theirs,pending:false});
+          if(!this.send(peers[0],message))this.end(s,id,'peer_closed');
+        }
+      } else if (mine.pending || message.byteLength>MAX_BYTES-(mine.bytes||0)-(theirs.bytes||0)) this.end(s,id,'transfer_limit');
       else {
-        // Only one chunk may be in flight in each direction. The peer must ack
-        // consumption before more data, bounding slow-reader queues.
-        const key = me===r.sender ? 'senderPending' : 'receiverPending';
-        const other = me===r.sender ? 'receiverPending' : 'senderPending';
-        if (message.byteLength===0) {
-          if (!r[other]) this.end(s,id,'unexpected_ack');
-          else {r[other]=false;if(!this.send(peers[0],message))this.end(s,id,'peer_closed');}
-        } else if (r[key] || message.byteLength>MAX_BYTES-r.bytes) this.end(s,id,'transfer_limit');
-        else {r.bytes+=message.byteLength;r[key]=true;if(!this.send(peers[0],message))this.end(s,id,'peer_closed');}
+        ws.serializeAttachment({...mine,messages,bytes:(mine.bytes||0)+message.byteLength,pending:true});
+        if(!this.send(peers[0],message))this.end(s,id,'peer_closed');
       }
       await this.save(s);
     });

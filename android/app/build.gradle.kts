@@ -14,8 +14,8 @@ android {
         minSdk = 29
         targetSdk = 37
         buildConfigField("boolean", "NODI_TEST_INSTALL", providers.gradleProperty("nodiTestInstall").orElse("true").get())
-        versionCode = 8
-        versionName = "1.0.0-alpha.8"
+        versionCode = 9
+        versionName = "1.0.0-alpha.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
