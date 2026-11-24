@@ -1,3 +1,18 @@
+# Alpha 7 release (2026-11-24)
+
+- `v1.0.0-alpha.7` pre-release on main `fb304fa` (PR #5 design, PR #6 bump): Android
+  1.0.0-alpha.7 / 7, macOS build 9, public variant. Assets and report in
+  `build/releases/alpha.7/` and on GitHub; checksums match the uploads.
+- Download secrets now point at the alpha.7 assets (Worker version `7fbc1a70-…`).
+- README redesigned with images in `docs/images/` (hero, android, macos). Regenerate:
+  Android shots from the API 37 emulator in English; macOS via
+  `NODI_SNAPSHOT=<png> build/…/Nodi.app/Contents/MacOS/Nodi -nodi.language en`.
+- Repo description, homepage and topics set; social preview image must be uploaded
+  manually in GitHub Settings.
+- New UI not yet checked on the physical S21 FE / Mac with real transfers.
+
+---
+
 # Alpha 6 release and download counter (2026-11-23)
 
 - Released `v1.0.0-alpha.6` (pre-release, tag on main `158aade`, PR #3; PR #2 merged
