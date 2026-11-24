@@ -1,10 +1,13 @@
 # Landing page (2026-11-24)
 
-- `site/public` is a static page (no Worker script, no trackers); `site/wrangler.jsonc`
-  deploys it as Worker static assets named `nodi` → https://nodi.igor-shura2011faik.workers.dev
-  Static-asset requests are free and do not count toward the relay's 100k/day quota.
-- Deploy: `cd server/cloudflare && npx wrangler deploy --config ../../site/wrangler.jsonc`.
+- Live at https://getnodi.pages.dev — a classic Cloudflare Pages project `getnodi` (no account subdomain
+  in the URL). `site/public` is the whole site: static files only, no Functions, so
+  requests are free and do not touch the relay's Workers quota.
+- Deploy: `cd server/cloudflare && npx wrangler pages deploy ../../site/public --project-name getnodi --branch main`
+  (no `--force`: the project already exists on classic Pages).
   Preview locally: `python3 -m http.server 8137 --directory site/public`.
+- The first deployment, a Worker named `nodi` on https://nodi.igor-shura2011faik.workers.dev, now only redirects
+  to the Pages site.
 - Download buttons use the counted /download links; checking them with a browser-like
   User-Agent counts a download (curl's default UA is not counted).
 - English is the default; UK/RU only after the visitor picks them (saved in localStorage).
