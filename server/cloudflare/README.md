@@ -112,9 +112,15 @@ Tokens and tickets must not be placed in URLs or logs.
 | PUT /v1/admin/test-devices/:id | admin | mark test install and purge its metrics |
 | GET /download/android, /download/macos | none | counted redirect; 503 until configured |
 
-Receiver polls /v1/incoming only while receiving is enabled (every 10 seconds).
-Presence expires after 45 seconds and means recent polling, not
-a guarantee of connectivity. Each side gets a distinct random ticket bound
+Receiver polls /v1/incoming only while receiving is enabled. Alpha 9+ clients send
+`X-Nodi-Wait: 1`: the relay holds the request for up to 50 seconds and answers as soon
+as a session for that device is created (long-poll); without the header it answers at
+once, as for Alpha 6–8 clients that poll every 10 seconds. A long-poll uses ~1,700
+requests per receiver per day instead of ~8,600. Presence (online for 75 seconds after a
+poll, or while a long-poll is held) and request-rate windows live in memory only, so
+polling writes no Durable Object rows; per-frame relay counters live in WebSocket
+attachments for the same reason (the free plan allows 100,000 rows written per day).
+Presence means recent polling, not a guarantee of connectivity. Each side gets a distinct random ticket bound
 to its device and session; consuming one is serialized and persisted. Tickets
 cannot reconnect a used socket. A lost upgrade response requires a new session.
 Sender may create a session for an offline peer, but it expires in 30 seconds.
@@ -139,7 +145,7 @@ On a successful WebSocket upgrade, wait for the text control message
 ## Limits and storage
 
 One SQLite-backed Durable Object holds a bounded private-alpha registry:
-64 devices, 16 concurrent sessions, at most 2 sessions involving each device,
+1000 devices, 32 concurrent sessions, at most 2 sessions involving each device,
 32 pending rooms, at most 2 rooms per host, 128 outstanding enrollment challenges,
 120 authenticated API requests/device/minute (room joins included), 120
 authenticated admin requests per 60-second window, 30-second rendezvous timeout,
@@ -256,6 +262,7 @@ and `npx wrangler deploy` only if code or configuration also changed. Verify wit
 (expect `302` and the release URL; curl itself is not counted). HEAD requests
 return 405.
 
-Capacity remains private-alpha: 64 registered identities, 32 pending rooms,
-16 relay sessions total. Public enrollment is limited globally and per source
+Capacity on the free plan: 1000 registered identities, 32 pending rooms,
+32 relay sessions total; roughly 50 receivers can stay online all day within the
+100,000 requests/day Workers limit when they long-poll. Public enrollment is limited globally and per source
 IP per minute. This is not a claim of readiness for unrestricted public scale.

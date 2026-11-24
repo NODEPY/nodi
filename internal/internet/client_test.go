@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -172,5 +174,44 @@ func TestIncomingDataDoesNotBlockOutgoingAck(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+func TestWaitIncomingLongPollsAndPaces(t *testing.T) {
+	var mu sync.Mutex
+	var polls int
+	var sawWait bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/incoming" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		mu.Lock()
+		polls++
+		sawWait = sawWait || r.Header.Get("X-Nodi-Wait") == "1"
+		mu.Unlock()
+		// Behave like a relay without long-poll support: answer at once, empty.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	}))
+	defer server.Close()
+	oldPause, oldQuick := pollPause, quickReturn
+	pollPause, quickReturn = 300*time.Millisecond, time.Second
+	defer func() { pollPause, quickReturn = oldPause, oldQuick }()
+
+	c := &Client{Token: strings.Repeat("a", 64), Base: server.URL}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c.RunReceiver(ctx, "127.0.0.1:1", func() []string { return nil }, func(string) {})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawWait {
+		t.Fatal("receiver did not ask for a long-poll")
+	}
+	// One immediate first poll, then a 300 ms pause after each quick empty long-poll
+	// answer: at most 5 polls in one second.
+	if polls < 2 || polls > 5 {
+		t.Fatalf("receiver polled %d times in 1s; quick empty answers must be paced", polls)
 	}
 }

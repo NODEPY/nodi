@@ -19,10 +19,13 @@ class NodiInternet(private val token: String, private val base: String = SERVER,
     companion object { const val SERVER = "https://nodi-relay.igor-shura2011faik.workers.dev" }
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(10,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).build()
-    fun api(method:String,path:String,data:JSONObject?=null):JSONObject {
+    // The relay holds a long-poll for up to 50 seconds, so it needs a longer read timeout.
+    private val longPoll = http.newBuilder().readTimeout(70,TimeUnit.SECONDS).build()
+    fun api(method:String,path:String,data:JSONObject?=null,wait:Boolean=false):JSONObject {
         val body = if(method in listOf("POST","PUT")) (data?.toString() ?: "").toRequestBody("application/json".toMediaType()) else null
-        val req=Request.Builder().url(base+path).header("Authorization","Bearer $token").method(method,body).build()
-        http.newCall(req).execute().use { r ->
+        val builder=Request.Builder().url(base+path).header("Authorization","Bearer $token").method(method,body)
+        if(wait)builder.header("X-Nodi-Wait","1")
+        (if(wait)longPoll else http).newCall(builder.build()).execute().use { r ->
             if(!r.isSuccessful) throw IOException("Інтернет Nodi: HTTP ${r.code}")
             val bytes=r.body?.byteStream()?.readBytesLimited(65536) ?: byteArrayOf()
             return if(bytes.isEmpty()) JSONObject() else JSONObject(String(bytes,Charsets.UTF_8))
@@ -78,25 +81,32 @@ class NodiInternet(private val token: String, private val base: String = SERVER,
     }
     fun receive(port:Int,peers:()->List<String>,status:(String)->Unit):Closeable {
         val stopped=AtomicBoolean(false);val active=ConcurrentHashMap<String,Socket>();val granted=mutableSetOf<String>()
-        val timer=Executors.newSingleThreadScheduledExecutor { r->Thread(r,"Nodi-relay-poll").apply{isDaemon=true} }
-        timer.scheduleWithFixedDelay({try{
+        // Long-poll loop: the relay answers as soon as a session arrives. A quick empty answer
+        // (relay without long-poll) or an error is followed by a 10-second pause.
+        val loop=Thread({ while(!stopped.get()){ val started=System.nanoTime(); var pause=0L
+          try{
             val allowed=peers().toSet()
             for(pin in allowed)if(pin !in granted){try{api("PUT","/v1/peers/$pin");granted.add(pin)}catch(_:Exception){}}
             for(pin in granted.toList())if(pin !in allowed){api("DELETE","/v1/peers/$pin");granted.remove(pin)}
             active.entries.removeIf{it.value.isClosed}
-            val incoming=api("GET","/v1/incoming").getJSONArray("sessions")
+            val incoming=api("GET","/v1/incoming",wait=true).getJSONArray("sessions")
+            if(incoming.length()==0 && System.nanoTime()-started<TimeUnit.SECONDS.toNanos(5))pause=10_000
             status("Інтернет увімкнено")
+            // The wait can last 50 s: re-read the allowlist so a device paired meanwhile is accepted.
+            val current=if(incoming.length()>0)peers().toSet() else allowed
             for(i in 0 until incoming.length()){
                 if(stopped.get())break
                 val s=incoming.getJSONObject(i);val id=s.getString("id")
-                if(s.getString("from") !in allowed){cancel(s);continue}
+                if(s.getString("from") !in current){cancel(s);continue}
                 if(active.containsKey(id)||active.size>=2)continue
                 val socket=Socket("127.0.0.1",port);active[id]=socket
                 if(stopped.get()){socket.close();break}
                 try{tunnel(s,socket)}catch(_:Exception){socket.close();cancel(s)}
             }
             active.entries.removeIf{it.value.isClosed}
-        }catch(_:Exception){if(!stopped.get())status("Інтернет недоступний")}},0,10,TimeUnit.SECONDS)
-        return Closeable{stopped.set(true);timer.shutdownNow();active.values.forEach{try{it.close()}catch(_:Exception){}};active.clear()}
+          }catch(_:Exception){if(!stopped.get())status("Інтернет недоступний");pause=10_000}
+          if(pause>0&&!stopped.get())try{Thread.sleep(pause)}catch(_:InterruptedException){}
+        } },"Nodi-relay-poll").apply{isDaemon=true;start()}
+        return Closeable{stopped.set(true);loop.interrupt();active.values.forEach{try{it.close()}catch(_:Exception){}};active.clear()}
     }
 }

@@ -43,7 +43,23 @@ func (c *Client) http() *http.Client {
 	}
 	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("relay redirect refused") }}
 }
+
+// Receiver pacing. A long-poll that returns quickly with nothing (an older relay without
+// long-poll support) or an error is followed by a pause, so the relay is never hammered.
+var (
+	longPollTimeout = 70 * time.Second
+	pollPause       = 10 * time.Second
+	quickReturn     = 5 * time.Second
+	// A session stays listed until the receiver joins it, so an answer holding only
+	// sessions already being handled must not trigger an immediate re-poll.
+	busyPause = time.Second
+)
+
 func (c *Client) API(ctx context.Context, method, path string, input, output any) error {
+	return c.api(ctx, method, path, input, output, false)
+}
+
+func (c *Client) api(ctx context.Context, method, path string, input, output any, wait bool) error {
 	var b []byte
 	var err error
 	if input != nil {
@@ -60,7 +76,15 @@ func (c *Client) API(ctx context.Context, method, path string, input, output any
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := c.http().Do(req)
+	client := c.http()
+	if wait {
+		// The relay holds this request for up to 50 seconds; allow for it.
+		req.Header.Set("X-Nodi-Wait", "1")
+		long := *client
+		long.Timeout = longPollTimeout
+		client = &long
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return errors.New("internet relay unavailable")
 	}
@@ -89,6 +113,15 @@ func (c *Client) Incoming(ctx context.Context) ([]Session, error) {
 		Sessions []Session `json:"sessions"`
 	}
 	err := c.API(ctx, "GET", "/v1/incoming", nil, &r)
+	return r.Sessions, err
+}
+
+// WaitIncoming long-polls the inbox: the relay answers as soon as a session arrives.
+func (c *Client) WaitIncoming(ctx context.Context) ([]Session, error) {
+	var r struct {
+		Sessions []Session `json:"sessions"`
+	}
+	err := c.api(ctx, "GET", "/v1/incoming", nil, &r, true)
 	return r.Sessions, err
 }
 func (c *Client) Cancel(s Session) {
@@ -211,6 +244,9 @@ func (c *Client) RunReceiver(ctx context.Context, address string, peers func() [
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	granted := map[string]bool{}
+	// The first poll (and the first after an error) answers at once, so the status
+	// is reported immediately; later polls are long-polls.
+	quick := true
 	for ctx.Err() == nil {
 		allowed := map[string]bool{}
 		for _, pin := range peers() {
@@ -228,11 +264,31 @@ func (c *Client) RunReceiver(ctx context.Context, address string, peers func() [
 				}
 			}
 		}
-		incoming, err := c.Incoming(ctx)
+		started := time.Now()
+		var incoming []Session
+		var err error
+		if quick {
+			incoming, err = c.Incoming(ctx)
+		} else {
+			incoming, err = c.WaitIncoming(ctx)
+		}
+		pause := time.Duration(0)
+		if err != nil || (!quick && len(incoming) == 0 && time.Since(started) < quickReturn) {
+			pause = pollPause
+		}
+		quick = err != nil
+		fresh := 0
 		if err != nil {
 			status("Інтернет недоступний: " + err.Error())
 		} else {
 			status("Інтернет увімкнено")
+		}
+		if len(incoming) > 0 {
+			// A long-poll can last 50 s; a device paired meanwhile (for example through
+			// a room) must be recognised, so the allowlist is re-read for the answer.
+			for _, pin := range peers() {
+				allowed[pin] = true
+			}
 		}
 		for _, s := range incoming {
 			if !allowed[s.From] {
@@ -248,6 +304,7 @@ func (c *Client) RunReceiver(ctx context.Context, address string, peers func() [
 			if busy {
 				continue
 			}
+			fresh++
 			workers.Add(1)
 			go func(s Session) {
 				defer workers.Done()
@@ -274,10 +331,13 @@ func (c *Client) RunReceiver(ctx context.Context, address string, peers func() [
 				<-done
 			}(s)
 		}
+		if pause == 0 && len(incoming) > 0 && fresh == 0 {
+			pause = busyPause
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(pause):
 		}
 	}
 }

@@ -120,7 +120,7 @@ Apple Silicon (M1 or newer) and macOS 12+ are required.
 ## Limitations
 
 > [!NOTE]
-> Nodi is an **alpha**. Over the Internet files are limited to 16 MiB and 10 minutes per session, receiving must stay on, and polling can add up to 10 seconds of delay. The relay currently accepts 64 device identities and 16 simultaneous transfers. There is no NAT traversal, offline delivery, folder transfer or resume. The Mac build is Apple Silicon only and ad-hoc signed; the Android build is debug-signed.
+> Nodi is an **alpha**. Over the Internet files are limited to 16 MiB and 10 minutes per session, and receiving must stay on. The free-plan relay accepts up to 1000 device identities and 32 simultaneous transfers, and comfortably serves a few dozen devices with receiving always on. There is no NAT traversal, offline delivery, folder transfer or resume. The Mac build is Apple Silicon only and ad-hoc signed; the Android build is debug-signed.
 
 See [TESTING.md](TESTING.md) for known test gaps and the device checklist.
 
@@ -176,7 +176,7 @@ The last command runs the Kotlin ↔ Go transport integration tests (JDK 25, no 
 <details>
 <summary><b>Versioning</b></summary>
 
-The latest release is **1.0.0-alpha.8** (tag `v1.0.0-alpha.8`). Prereleases use `MAJOR.MINOR.PATCH-alpha.N`, stable releases `MAJOR.MINOR.PATCH`. Android `versionName` matches the release; `versionCode` increases for each distributed build (currently 8). macOS uses `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 10`; increase the build number for each distributed build. Go **1.22** is the minimum toolchain in `go.mod`, not the app version.
+The latest release is **1.0.0-alpha.9** (tag `v1.0.0-alpha.9`). Prereleases use `MAJOR.MINOR.PATCH-alpha.N`, stable releases `MAJOR.MINOR.PATCH`. Android `versionName` matches the release; `versionCode` increases for each distributed build (currently 9). macOS uses `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 11`; increase the build number for each distributed build. Go **1.22** is the minimum toolchain in `go.mod`, not the app version.
 
 </details>
 
