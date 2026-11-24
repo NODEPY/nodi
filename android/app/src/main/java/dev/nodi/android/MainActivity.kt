@@ -683,11 +683,11 @@ class MainActivity : Activity() {
         return uri
     }
     private fun feedbackSettings() {
-        val input=EditText(this).apply{hint="Відгук автору (до 1000 символів)";filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}.onDialog()
-        val consent=android.widget.CheckBox(this).apply{text="Ділитися статистикою використання";isChecked=NodiMetrics.consent(this@MainActivity)}.onDialog()
+        val input=EditText(this).apply{hint=tr("Відгук автору (до 1000 символів)");filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}.onDialog()
+        val consent=android.widget.CheckBox(this).apply{text=tr("Ділитися статистикою використання");isChecked=NodiMetrics.consent(this@MainActivity)}.onDialog()
         val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent)}
-        android.app.AlertDialog.Builder(this).setTitle("Відгук і приватність")
-            .setMessage("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів."+(if(BuildConfig.NODI_TEST_INSTALL)" Ця тестова збірка не враховується." else ""))
+        NodiDialog(this).setTitle("Відгук і приватність")
+            .setMessage(tr("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів.")+(if(BuildConfig.NODI_TEST_INSTALL)" "+tr("Ця тестова збірка не враховується.") else ""))
             .setView(box).setPositiveButton("Надіслати відгук"){_,_->
                 NodiMetrics.consent(this,consent.isChecked)
                 val text=input.text.toString().trim()
@@ -697,11 +697,11 @@ class MainActivity : Activity() {
     }
     @Volatile private var roomThread:Thread?=null
     private fun internetSettings() {
-        if(roomThread!=null){android.app.AlertDialog.Builder(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
+        if(roomThread!=null){NodiDialog(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
             .setPositiveButton("Скасувати кімнату"){_,_->roomThread?.interrupt()}.setNegativeButton("Залишити",null).show();return}
         if(busy || texting || pairing || scanning)return
         val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true;typeface=Typeface.MONOSPACE;gravity=Gravity.CENTER;textSize=17f;letterSpacing=0.04f}.onDialog()
-        android.app.AlertDialog.Builder(this).setTitle("Інтернет · кімната")
+        NodiDialog(this).setTitle("Інтернет · кімната")
             .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.")
             .setView(dialogBox(input)).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
             .setNeutralButton("Приєднатися"){_,_->internetRoom(input.text.toString())}
@@ -721,12 +721,12 @@ class MainActivity : Activity() {
                 val save:(TrustedDevice)->Unit={peer->deviceBook.remember(peer)}
                 if(code==null)rooms.host(own,{value->ui{
                     status.text="Код кімнати: $value"
-                    android.app.AlertDialog.Builder(this).setTitle("Код кімнати").setMessage("$value\n\nПередай код іншій людині. Залиш Nodi відкритим.")
+                    NodiDialog(this).setTitle("Код кімнати").setMessage(value+"\n\n"+tr("Передай код іншій людині. Залиш Nodi відкритим."))
                         .setPositiveButton("Скопіювати"){_,_->(getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Nodi room",value))}
                         .setNegativeButton("Закрити",null).show()
                 }},{name,value->
                     val answer=java.util.concurrent.atomic.AtomicBoolean(false);val latch=java.util.concurrent.CountDownLatch(1)
-                    ui{android.app.AlertDialog.Builder(this).setTitle("Підключити $name?").setMessage("Код кімнати: $value\nПідтверджуй лише очікуваний пристрій.")
+                    ui{NodiDialog(this).setTitle(tr("Підключити")+" $name?").setMessage(tr("Код кімнати:")+" $value\n"+tr("Підтверджуй лише очікуваний пристрій."))
                         .setPositiveButton("Підключити"){_,_->answer.set(true);latch.countDown()}
                         .setNegativeButton("Відхилити"){_,_->latch.countDown()}.setOnCancelListener{latch.countDown()}.show()}
                     latch.await(60,java.util.concurrent.TimeUnit.SECONDS)&&answer.get()
@@ -1309,7 +1309,7 @@ class MainActivity : Activity() {
         val ownPin = runCatching { NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex() }.getOrNull()
         val device = nearbyAll.firstOrNull { it.pin != ownPin && it.pin !in saved && it.pin !in discoveryPromptPins } ?: return
         discoveryPromptPins.add(device.pin)
-        discoveryPrompt = android.app.AlertDialog.Builder(this)
+        discoveryPrompt = NodiDialog(this)
             .setTitle(tr("Знайдено пристрій"))
             .setMessage(device.name + "\n\n" + tr("З’єднати через Wi-Fi?"))
             .setPositiveButton(tr("З’єднати")) { _, _ ->
@@ -1337,7 +1337,7 @@ class MainActivity : Activity() {
         val instructions = tr("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") +
             "\n\n" + tr("Адреси цього пристрою:") + "\n" + own.ifEmpty { tr("Увімкни приймання, щоб побачити адресу.") }
         if (peer == null) {
-            android.app.AlertDialog.Builder(this).setTitle(tr("Адреса / VPN"))
+            NodiDialog(this).setTitle(tr("Адреса / VPN"))
                 .setMessage(instructions).setPositiveButton(tr("Готово"), null).show()
             return
         }
@@ -1348,7 +1348,7 @@ class MainActivity : Activity() {
             filters = arrayOf(InputFilter.LengthFilter(64))
             setText(manualEndpoint(peer.fingerprint) ?: peer.address)
         }.onDialog()
-        val dialog = android.app.AlertDialog.Builder(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
+        val dialog = NodiDialog(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
             .setMessage(instructions).setView(dialogBox(input))
             .setPositiveButton(tr("Зберегти"), null)
             .setNeutralButton(tr("Автоматично")) { _, _ ->
@@ -1420,7 +1420,7 @@ class MainActivity : Activity() {
                 ui { showMode(false); status.text = tr("Підключення збережене"); showConnected(device.name) }
             } catch (e: Exception) {
                 ui { if (!foreground) return@ui
-                    android.app.AlertDialog.Builder(this).setTitle(tr("Не вдалося з’єднати"))
+                    NodiDialog(this).setTitle(tr("Не вдалося з’єднати"))
                     .setMessage(tr("Перевір вибір пристроїв і повтори. Або скористайся QR."))
                     .setPositiveButton(tr("Готово"),null).show() }
             } finally {
@@ -1432,7 +1432,7 @@ class MainActivity : Activity() {
     private fun showPairCode(name: String, compare: String) {
         ui {
             if (!foreground || !pairing) return@ui
-            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("Підтвердь на іншому пристрої"))
+            wifiDialog = NodiDialog(this).setTitle(tr("Підтвердь на іншому пристрої"))
                 .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
                 .setNegativeButton(tr("Скасувати")) { _, _ -> pairClient?.cancel() }
                 .setOnCancelListener { pairClient?.cancel() }.show()
@@ -1459,7 +1459,7 @@ class MainActivity : Activity() {
         ui {
             if (!foreground) { latch.countDown(); return@ui }
             wifiDecision = latch
-            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("З’єднати пристрої?"))
+            wifiDialog = NodiDialog(this).setTitle(tr("З’єднати пристрої?"))
                 .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
                 .setPositiveButton(tr("З’єднати")) { _, _ -> answer.set(true); latch.countDown() }
                 .setNegativeButton(tr("Скасувати")) { _, _ -> latch.countDown() }
@@ -1489,7 +1489,7 @@ class MainActivity : Activity() {
     }
     private fun forgetDevice() {
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition) ?: return
-        android.app.AlertDialog.Builder(this).setTitle(tr("Видалити ${device.name}?"))
+        NodiDialog(this).setTitle(tr("Видалити ${device.name}?"))
             .setMessage(tr("Збережене підключення й доступ до цього телефона буде видалено. Активна передача перерветься. Для повторного підключення скануй новий QR Mac. Пристрій залишиться у Wi-Fi."))
             .setNegativeButton(tr("Скасувати"), null)
             .setPositiveButton(tr("Видалити")) { _, _ ->
@@ -1507,6 +1507,15 @@ class MainActivity : Activity() {
     private var previewKey = ""
     private var screenRoot: FrameLayout? = null
     private fun tr(value: String) = NodiText.text(this, value)
+    /** AlertDialog.Builder that translates titles, messages and button labels like label() does. */
+    private class NodiDialog(private val context: Context) : android.app.AlertDialog.Builder(context) {
+        private fun t(v: CharSequence?) = NodiText.text(context, v)
+        override fun setTitle(title: CharSequence?): android.app.AlertDialog.Builder = super.setTitle(t(title))
+        override fun setMessage(message: CharSequence?): android.app.AlertDialog.Builder = super.setMessage(t(message))
+        override fun setPositiveButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setPositiveButton(t(text), listener)
+        override fun setNegativeButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setNegativeButton(t(text), listener)
+        override fun setNeutralButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setNeutralButton(t(text), listener)
+    }
     private fun setup(first: Boolean) {
         if (busy || pairing || selecting) return
         val previous=uiPrefs.getString("language","en") ?: "en"
