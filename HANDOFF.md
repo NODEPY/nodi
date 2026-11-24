@@ -1,3 +1,14 @@
+# Alpha 8 release (2026-11-24)
+
+- `v1.0.0-alpha.8`: full English/Russian translations (PR #8), Android 1.0.0-alpha.8 / 8,
+  macOS build 10, public variant. Assets and report in `build/releases/alpha.8/`.
+- `scripts/check-translations.py` runs in the Go checks workflow (Ubuntu, stable Go).
+  New UI text must be added to NodiText.kt (Android) or nodiWords in Nodi.swift (macOS;
+  Go core messages too). A duplicate key in nodiWords crashes the Mac app at launch.
+- Download secrets point at the alpha.8 assets after release.
+
+---
+
 # Alpha 7 release (2026-11-24)
 
 - `v1.0.0-alpha.7` pre-release on main `fb304fa` (PR #5 design, PR #6 bump): Android

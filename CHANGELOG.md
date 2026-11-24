@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0-alpha.8 — 2026-11-24
+
+### 🌐 Fully translated
+
+- English and Russian interfaces no longer show Ukrainian text: statuses (for example "Internet on"), transfer and network errors, Android notifications and messages from the Go core are all translated.
+- Error messages that combine a reason and a diagnostic code are translated part by part.
+- macOS: the Edit menu, the Add phone window and the QR accessibility label are translated.
+
+### 🛠 Fixes
+
+- Duplicate translation keys removed; a duplicate key would crash the macOS app at launch.
+
+### 🧪 Tests & CI
+
+- `scripts/check-translations.py` runs in CI and fails on any untranslated UI string, non-English English text, Ukrainian letters in Russian text or duplicate keys.
+
 ## 1.0.0-alpha.7 — 2026-11-24
 
 ### ✨ New look
