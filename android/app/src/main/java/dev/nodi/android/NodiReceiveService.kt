@@ -273,8 +273,9 @@ class NodiReceiveService : Service() {
             "saved_unconfirmed" -> "Файл збережено, але Mac не отримав підтвердження"
             else -> "Не вдалося отримати файл"
         }
-        val detail = if (event.phase == "error") receiveError(event.message) +
-            if (event.diagnostic.isNotEmpty()) "\nКод помилки: ${event.diagnostic}" else ""
+        // Translate each part before joining: the UI cannot look up a combined string.
+        val detail = if (event.phase == "error") NodiText.text(this, receiveError(event.message)) +
+            if (event.diagnostic.isNotEmpty()) "\n" + NodiText.text(this, "Код помилки:") + " " + event.diagnostic else ""
             else event.name
         publish(state.copy(status = status, detail = detail, bytes = event.bytes, total = event.total, transferring = transferring))
     }

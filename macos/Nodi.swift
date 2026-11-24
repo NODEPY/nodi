@@ -92,7 +92,7 @@ final class InviteQRView: NSView {
         qrImage = image
         super.init(frame: .zero)
         setAccessibilityElement(true)
-        setAccessibilityLabel("QR-код для підключення телефона до Nodi")
+        setAccessibilityLabel(NodiL("QR-код для підключення телефона до Nodi"))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override var isOpaque: Bool { true }
@@ -123,11 +123,11 @@ final class CoreTask {
                onEvent: @escaping (CoreEvent) -> Void,
                onExit: @escaping (Int32) -> Void) throws {
         guard let binaryDirectory = Bundle.main.executableURL?.deletingLastPathComponent() else {
-            throw NSError(domain: "Nodi", code: 1, userInfo: [NSLocalizedDescriptionKey: "Не знайдено ресурси Nodi.app."])
+            throw NSError(domain: "Nodi", code: 1, userInfo: [NSLocalizedDescriptionKey: NodiL("Не знайдено ресурси Nodi.app.")])
         }
         let executable = binaryDirectory.appendingPathComponent("nodi-core")
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw NSError(domain: "Nodi", code: 2, userInfo: [NSLocalizedDescriptionKey: "Не знайдено Go-ядро. Запусти scripts/run-macos.sh повторно."])
+            throw NSError(domain: "Nodi", code: 2, userInfo: [NSLocalizedDescriptionKey: NodiL("Не знайдено Go-ядро. Запусти scripts/run-macos.sh повторно.")])
         }
         var environment=ProcessInfo.processInfo.environment
         environment.removeValue(forKey:"NODI_RELAY_TOKEN");environment.removeValue(forKey:"NODI_RELAY_PIN")
@@ -371,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu(); let appItem = NSMenuItem(); menu.addItem(appItem)
         let appMenu = NSMenu(); appItem.submenu = appMenu
         appMenu.addItem(withTitle: NodiL("Завершити Nodi"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        let edit = NSMenuItem(title: "Редагування", action: nil, keyEquivalent: ""); let sub = NSMenu(); edit.submenu = sub; menu.addItem(edit)
+        let edit = NSMenuItem(title: NodiL("Редагування"), action: nil, keyEquivalent: ""); let sub = NSMenu(); edit.submenu = sub; menu.addItem(edit)
         sub.addItem(withTitle: NodiL("Копіювати"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         sub.addItem(withTitle: NodiL("Вставити"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         sub.addItem(withTitle: NodiL("Вибрати все"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
@@ -532,7 +532,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.accessoryView = self.addressPicker; alert.addButton(withTitle: NodiL("Готово"))
         alert.beginSheetModal(for: self.window) { _ in }
     }
-    private func log(_ text: String) {
+    private func log(_ original: String) {
+        let text = NodiL(original)
         self.lastEvent.stringValue = text
         self.lastEvent.toolTip = text
         self.activity.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.labelColor]))
@@ -835,7 +836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.invites.indices.contains(i), !self.invites[i].address.hasPrefix("127."), let qr = InviteQRView(code: self.invites[i].code) else { self.log("Не знайдено адресу Wi-Fi для QR."); return }
         self.closeQR()
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 510, height: 650), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        panel.title = "Додати телефон"; panel.isReleasedWhenClosed = false
+        panel.title = NodiL("Додати телефон"); panel.isReleasedWhenClosed = false
         let root = NSView(); panel.contentView = root
         let hint = self.label("На телефоні: Nodi → Додати пристрій")
         let note = self.label("Одноразовий · 2 хвилини · спільний Wi-Fi", size: 11)
@@ -927,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try task.start(arguments:["send","-json","-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
                 guard let self=self else{return}
-                if event.type=="route"{self.sendStatus.stringValue="Інтернет · "+file.lastPathComponent}
+                if event.type=="route"{self.sendStatus.stringValue=NodiL("Інтернет · ")+file.lastPathComponent}
                 else if event.type=="sent"{self.sendConfirmed=true;NodiInternet.usage("file")}
                 else if event.type=="error" || event.type=="fatal"{failure=event.message ?? NodiL("Помилка передачі")}
             },onExit:{[weak self] exitCode in
@@ -1184,6 +1185,36 @@ func NodiL(_ original: String) -> String {
 }
 private let nodiWords: [String:[String]] = [
 "Зберегти": ["Save", "Сохранить"],
+"Інтернет увімкнено": ["Internet on", "Интернет включён"],
+"Інтернет-альфа: файл має бути не більшим за 16 MiB": ["Internet alpha: files must be 16 MiB or smaller", "Интернет-альфа: файл должен быть не больше 16 MiB"],
+"Код помилки:": ["Error code:", "Код ошибки:"],
+"Код кімнати має містити 16 символів": ["A room code has 16 characters", "Код комнаты должен содержать 16 символов"],
+"Підключення скасовано": ["Connection cancelled", "Подключение отменено"],
+"Підключення вже виконується": ["A connection is already in progress", "Подключение уже выполняется"],
+"Пристрої підключено через інтернет": ["Devices connected over the Internet", "Устройства подключены через интернет"],
+"Отримано текст:": ["Received text:", "Получен текст:"],
+"Інтернет недоступний:": ["Internet unavailable:", "Интернет недоступен:"],
+"Інтернет:": ["Internet:", "Интернет:"],
+"Неправильний код кімнати": ["Invalid room code", "Неверный код комнаты"],
+"QR-код для підключення телефона до Nodi": ["QR code to connect a phone to Nodi", "QR-код для подключения телефона к Nodi"],
+"Не знайдено ресурси Nodi.app.": ["Nodi.app resources not found.", "Не найдены ресурсы Nodi.app."],
+"Не знайдено Go-ядро. Запусти scripts/run-macos.sh повторно.": ["Go core not found. Run scripts/run-macos.sh again.", "Не найдено Go-ядро. Запусти scripts/run-macos.sh повторно."],
+"Змінити папку…": ["Change folder…", "Изменить папку…"],
+"Додати телефон — QR": ["Add phone — QR", "Добавить телефон — QR"],
+"Скануй QR камерою телефона один раз — потім надсилай файли в обидва боки.": ["Scan the QR once with your phone's camera — then send files both ways.", "Сканируй QR камерой телефона один раз — потом отправляй файлы в обе стороны."],
+"Вибрати файл…": ["Choose file…", "Выбрать файл…"],
+"Надіслати файл": ["Send file", "Отправить файл"],
+"Відгук має містити від 1 до 1000 символів": ["Feedback must be 1 to 1000 characters", "Отзыв должен содержать от 1 до 1000 символов"],
+"Спочатку підключи Інтернет у Nodi": ["Connect Internet in Nodi first", "Сначала подключи интернет в Nodi"],
+"Не вдалося надіслати відгук": ["Could not send feedback", "Не удалось отправить отзыв"],
+"Інтернет доступний для спроби": ["Internet available to try", "Интернет доступен для попытки"],
+"Спробуємо через інтернет · увімкни приймання": ["Will try over the Internet · turn on receiving", "Попробуем через интернет · включи приём"],
+"Не вдалося зберегти інтернет-доступ у Keychain": ["Could not save Internet access to Keychain", "Не удалось сохранить интернет-доступ в Keychain"],
+"Пристрій підключено через інтернет": ["Device connected over the Internet", "Устройство подключено через интернет"],
+"Помилка Nodi": ["Nodi error", "Ошибка Nodi"],
+"Інтернет · ": ["Internet · ", "Интернет · "],
+"Помилка передачі": ["Transfer error", "Ошибка передачи"],
+"Код не підходить цьому пристрою.": ["This code does not match this device.", "Код не подходит этому устройству."],
 "Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів.": ["Only the author sees feedback. Statistics are optional: active installs and transfer counts, without file names, texts or contacts. Kept for up to 30 days.", "Отзыв видит только автор. Статистика добровольная: активные установки и количество передач, без имён файлов, текстов и контактов. Хранится до 30 дней."],
 "Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 16 MiB per file.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 16 MiB на файл."],
 "Передай іншій людині й залиш Nodi відкритим.": ["Share it with the other person and keep Nodi open.", "Передай другому человеку и оставь Nodi открытым."],
