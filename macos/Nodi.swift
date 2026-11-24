@@ -58,13 +58,25 @@ final class FlippedDocumentView: NSView {
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { highlight(false) }
 }
 
+/// "Aurora night" palette shared with Android: inky background, violet→cyan accent.
+enum NodiPalette {
+    static let background = NSColor(srgbRed: 11/255, green: 12/255, blue: 21/255, alpha: 1)
+    static let card = NSColor(srgbRed: 21/255, green: 23/255, blue: 38/255, alpha: 1)
+    static let raised = NSColor(srgbRed: 31/255, green: 34/255, blue: 54/255, alpha: 1)
+    static let stroke = NSColor(srgbRed: 42/255, green: 46/255, blue: 71/255, alpha: 1)
+    static let text = NSColor(srgbRed: 244/255, green: 245/255, blue: 251/255, alpha: 1)
+    static let accent = NSColor(srgbRed: 139/255, green: 124/255, blue: 255/255, alpha: 1)
+    static let accent2 = NSColor(srgbRed: 76/255, green: 201/255, blue: 240/255, alpha: 1)
+    static let accentText = NSColor(srgbRed: 196/255, green: 186/255, blue: 255/255, alpha: 1)
+}
+
 final class CardView: NSView {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = NSColor(srgbRed: 25/255, green: 28/255, blue: 35/255, alpha: 1).cgColor
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        layer?.backgroundColor = NodiPalette.card.cgColor
+        layer?.borderColor = NodiPalette.stroke.cgColor
         layer?.borderWidth = 1
-        layer?.cornerRadius = 16
+        layer?.cornerRadius = 18
     }
 }
 
@@ -206,10 +218,10 @@ final class NodiSetup:NSObject {
         self.panel=NSPanel(contentRect:NSRect(x:0,y:0,width:440,height:530),styleMask:[.titled,.fullSizeContentView],backing:.buffered,defer:false)
         super.init()
         self.panel.titleVisibility = .hidden;self.panel.titlebarAppearsTransparent=true;self.panel.isReleasedWhenClosed=false
-        self.panel.appearance=NSAppearance(named:.darkAqua);self.panel.backgroundColor=NSColor(srgbRed:16/255,green:18/255,blue:23/255,alpha:1)
+        self.panel.appearance=NSAppearance(named:.darkAqua);self.panel.backgroundColor=NodiPalette.background
         let root=NSView();self.panel.contentView=root
         let brand=NodiLabel(labelWithString:"nodi");brand.font = .systemFont(ofSize:24,weight:.bold)
-        let hero=NSImageView();hero.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");hero.contentTintColor=NSColor(srgbRed:160/255,green:177/255,blue:1,alpha:1);hero.imageScaling = .scaleProportionallyUpOrDown
+        let hero=NSImageView();hero.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");hero.contentTintColor=NodiPalette.accent;hero.imageScaling = .scaleProportionallyUpOrDown
         hero.heightAnchor.constraint(equalToConstant:64).isActive=true;hero.widthAnchor.constraint(equalToConstant:64).isActive=true
         self.heading.font = .systemFont(ofSize:25,weight:.semibold)
         self.subtitle.font = .systemFont(ofSize:13);self.subtitle.textColor = .secondaryLabelColor
@@ -362,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildWindow() {
         self.window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         self.window.appearance = NSAppearance(named: .darkAqua)
-        self.window.backgroundColor = NSColor(srgbRed: 16/255, green: 18/255, blue: 23/255, alpha: 1)
+        self.window.backgroundColor = NodiPalette.background
         self.window.title = "Nodi"; self.window.contentMinSize = NSSize(width: 760, height: 600); self.window.isReleasedWhenClosed = false; self.window.center()
         let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; self.window.contentView = scroll
         let root = FlippedDocumentView(); root.wantsLayer=true; root.layer?.backgroundColor=self.window.backgroundColor.cgColor; scroll.documentView = root; root.translatesAutoresizingMaskIntoConstraints = false
@@ -380,14 +392,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.folderLabel.stringValue = self.inbox.lastPathComponent; self.folderLabel.toolTip = self.inbox.path; self.folderLabel.lineBreakMode = .byTruncatingMiddle
         self.fileLabel.lineBreakMode = .byTruncatingMiddle
         self.spinner.style = .spinning; self.spinner.controlSize = .small; self.spinner.isDisplayedWhenStopped = false
-        let title = self.label("nodi", size: 26, bold: true)
+        let title = self.label("nodi", size: 28, bold: true)
+        if let rounded = NSFont.systemFont(ofSize: 28, weight: .heavy).fontDescriptor.withDesign(.rounded) { title.font = NSFont(descriptor: rounded, size: 28) }
+        title.textColor = NodiPalette.accentText
         let mark=NSImageView();mark.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");mark.imageScaling = .scaleProportionallyUpOrDown
         mark.widthAnchor.constraint(equalToConstant:40).isActive=true;mark.heightAnchor.constraint(equalToConstant:40).isActive=true
         self.addButton.title = "QR"; self.forgetButton.title = "Видалити"
         self.chooseButton.title = "Вибрати файл"; self.sendButton.title = "Надіслати"; self.folderButton.title = "Змінити"
-        let accent = NSColor(srgbRed: 160/255, green: 177/255, blue: 255/255, alpha: 1)
-        for button in [refresh, self.sendButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .black; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 40).isActive = true }
+        let accent = NodiPalette.accent
+        for button in [refresh, self.sendButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
         self.symbol(refresh,"wifi"); self.symbol(self.addButton,"qrcode"); self.symbol(self.forgetButton,"trash")
+        internet.tonal = true; internet.font = .systemFont(ofSize: 14, weight: .semibold); internet.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        self.symbol(internet,"globe")
         self.symbol(self.chooseButton,"doc.badge.plus"); self.symbol(self.sendButton,"arrow.up"); self.symbol(open,"folder")
         self.forgetButton.contentTintColor = .secondaryLabelColor
         self.deviceHint.font = .systemFont(ofSize: 12); self.deviceHint.textColor = .secondaryLabelColor
@@ -395,7 +411,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.fileLabel.font = .systemFont(ofSize: 15, weight: .medium)
         self.devicePicker.controlSize = .large; self.devicePicker.heightAnchor.constraint(equalToConstant:38).isActive=true
         let endpointButton = NodiButton(title: "Адреса / VPN", target: self, action: #selector(editEndpoint)); endpointButton.bezelStyle = .rounded
-        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([internet, self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
+        self.symbol(endpointButton,"lock.shield")
+        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), internet, refresh]), self.devicePicker, self.row([self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
         let network = NodiButton(title: "Мережа…", target: self, action: #selector(showNetwork)); network.bezelStyle = .rounded
         let receive = self.card([self.label("Отримати", size: 15, bold: true), self.receiveStatus, self.receiveButton, self.folderLabel, self.row([self.folderButton,open,network])])
         self.receiveStatus.maximumNumberOfLines=2
@@ -420,10 +437,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.symbol(settingsButton,"gearshape");settingsButton.toolTip=NodiL("Параметри");settingsButton.setAccessibilityLabel(NodiL("Параметри"));settingsButton.title=""
         settingsButton.widthAnchor.constraint(equalToConstant:36).isActive=true
         let feedback=NodiButton(title:"Відгук",target:self,action:#selector(feedbackSettings));feedback.bezelStyle = .rounded
-        let header=self.row([mark,title,NSView(),feedback,settingsButton])
+        self.symbol(feedback,"bubble.left")
+        let subtitle=self.label("Файли поруч", size: 13); subtitle.textColor = .secondaryLabelColor
+        let titles=NSStackView(views:[title,subtitle]); titles.orientation = .vertical; titles.alignment = .leading; titles.spacing = 0
+        let header=self.row([mark,titles,NSView(),feedback,settingsButton])
         let transfers=NSStackView(views:[send,receive]);transfers.orientation = .horizontal;transfers.alignment = .top;transfers.distribution = .fillEqually;transfers.spacing=16
         send.heightAnchor.constraint(equalTo:receive.heightAnchor).isActive=true
-        let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
+        let stack = NSStackView(views: [header, connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 20), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)])
         for v in [header, connection, transfers, text, logScroll] { v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
@@ -1355,20 +1375,24 @@ private let nodiWords: [String:[String]] = [
 final class NodiLabel:NSTextField { override var stringValue:String { get { super.stringValue } set { super.stringValue=NodiL(newValue) } } }
 final class NodiButton:NSButton {
     var primary=false { didSet { needsDisplay=true } }
+    /// Secondary call to action: translucent accent fill with accent text.
+    var tonal=false { didSet { needsDisplay=true } }
     override var title:String { get { super.title } set { super.title=NodiL(newValue);invalidateIntrinsicContentSize();needsDisplay=true } }
     override var intrinsicContentSize:NSSize {
-        let width=(self.title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13,weight:.medium)]).width
+        let width=(self.title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13.5,weight:.bold)]).width
         return NSSize(width:max(36,width+28+(self.image == nil ? 0 : (self.title.isEmpty ? 0 : 22))),height:36)
     }
     override func draw(_ dirtyRect:NSRect) {
-        let accent=NSColor(srgbRed:160/255,green:177/255,blue:1,alpha:1)
-        let surface=NSColor(srgbRed:38/255,green:43/255,blue:53/255,alpha:1)
-        let alpha:CGFloat=self.isEnabled ? 1 : 0.38
-        let fill=self.primary ? accent : surface
-        fill.withAlphaComponent(self.isHighlighted ? 0.65 : alpha).setFill()
-        NSBezierPath(roundedRect:self.bounds.insetBy(dx:1,dy:1),xRadius:10,yRadius:10).fill()
-        let color=(self.primary ? NSColor(srgbRed:16/255,green:18/255,blue:23/255,alpha:1) : NSColor(srgbRed:231/255,green:235/255,blue:244/255,alpha:1)).withAlphaComponent(alpha)
-        let attrs:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:13,weight:.medium),.foregroundColor:color]
+        let alpha:CGFloat=(self.isEnabled ? 1 : 0.42)*(self.isHighlighted ? 0.75 : 1)
+        let shape=NSBezierPath(roundedRect:self.bounds.insetBy(dx:1,dy:1),xRadius:12,yRadius:12)
+        if self.primary {
+            NSGradient(starting:NodiPalette.accent.withAlphaComponent(alpha),ending:NodiPalette.accent2.withAlphaComponent(alpha))?.draw(in:shape,angle:-20)
+        } else {
+            (self.tonal ? NodiPalette.accent.withAlphaComponent(0.18*alpha) : NodiPalette.raised.withAlphaComponent(alpha)).setFill(); shape.fill()
+            (self.tonal ? NodiPalette.accent.withAlphaComponent(0.45*alpha) : NodiPalette.stroke.withAlphaComponent(alpha)).setStroke(); shape.lineWidth=1; shape.stroke()
+        }
+        let color=(self.primary ? NSColor.white : (self.tonal ? NodiPalette.accentText : NodiPalette.text)).withAlphaComponent(alpha)
+        let attrs:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:13.5,weight:self.primary ? .bold : .semibold),.foregroundColor:color]
         let size=(self.title as NSString).size(withAttributes:attrs)
         let imageWidth:CGFloat=self.image == nil ? 0 : (self.title.isEmpty ? 16 : 22)
         let x=max(10,(self.bounds.width-size.width-imageWidth)/2)
@@ -1379,7 +1403,7 @@ final class NodiButton:NSButton {
         }
         (self.title as NSString).draw(at:NSPoint(x:x+imageWidth,y:(self.bounds.height-size.height)/2),withAttributes:attrs)
         if self.window?.firstResponder === self {
-            accent.withAlphaComponent(0.8).setStroke();let ring=NSBezierPath(roundedRect:self.bounds.insetBy(dx:2,dy:2),xRadius:9,yRadius:9);ring.lineWidth=2;ring.stroke()
+            NodiPalette.accentText.withAlphaComponent(0.8).setStroke();let ring=NSBezierPath(roundedRect:self.bounds.insetBy(dx:2,dy:2),xRadius:11,yRadius:11);ring.lineWidth=2;ring.stroke()
         }
     }
 }

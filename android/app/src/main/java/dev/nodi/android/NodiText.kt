@@ -47,6 +47,8 @@ object NodiText {
 "Надсилання" to arrayOf("Send","Отправка"),
 "З’єднати" to arrayOf("Connect","Соединить"),
 "Сканувати QR" to arrayOf("Scan QR","Сканировать QR"),
+"Інтернет" to arrayOf("Internet","Интернет"),
+"Відгук / приватність" to arrayOf("Feedback / privacy","Отзыв / приватность"),
 "З’єднати пристрої?" to arrayOf("Connect devices?","Соединить устройства?"),
 "Коди на обох екранах мають збігатися" to arrayOf("The codes on both screens must match","Коды на обоих экранах должны совпадать"),
 "Вибери пристрій у Wi-Fi" to arrayOf("Choose a nearby device","Выбери устройство в Wi-Fi"),
