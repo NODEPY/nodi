@@ -55,11 +55,17 @@ class MainActivity : Activity() {
         const val RECEIVE_NOTIFICATION_PERMISSION = 403
         const val NETWORK_PERMISSION_REQUEST = 302
         const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
-        val BACKGROUND = Color.rgb(16, 18, 23)
-        val CARD = Color.rgb(25, 28, 35)
-        val TEXT = Color.rgb(237, 242, 248)
-        val MUTED = Color.rgb(151, 158, 174)
-        val ACCENT = Color.rgb(160, 177, 255)
+        // "Aurora night": inky background, violet→cyan accent gradient.
+        val BACKGROUND = Color.rgb(11, 12, 21)
+        val CARD = Color.rgb(21, 23, 38)
+        val RAISED = Color.rgb(31, 34, 54)
+        val STROKE = Color.rgb(42, 46, 71)
+        val TEXT = Color.rgb(244, 245, 251)
+        val MUTED = Color.rgb(145, 150, 176)
+        val HINT = Color.rgb(98, 103, 128)
+        val ACCENT = Color.rgb(139, 124, 255)
+        val ACCENT2 = Color.rgb(76, 201, 240)
+        val SUCCESS = Color.rgb(91, 227, 168)
     }
     private data class SelectedFile(val uri: Uri, val name: String, val size: Long)
     private val worker = Executors.newSingleThreadExecutor()
@@ -180,7 +186,7 @@ class MainActivity : Activity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(android.R.style.Theme_Material_Light_NoActionBar)
+        setTheme(R.style.Theme_Nodi_Main)
         super.onCreate(savedInstanceState)
         deviceBook = NodiDeviceStore.get(this)
         NodiMetrics.report(this,"active")
@@ -217,31 +223,52 @@ class MainActivity : Activity() {
         assets.open("NodiMark.png").use {setImageBitmap(android.graphics.BitmapFactory.decodeStream(it))}
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-    private fun panelBackground(color: Int): GradientDrawable = GradientDrawable().apply {
+    private fun panelBackground(color: Int, radius: Int = 16): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(14).toFloat()
+        cornerRadius = dp(radius).toFloat()
     }
+    /** Card surface: slightly lifted panel with a hairline border. */
+    private fun cardBackground(): GradientDrawable = panelBackground(CARD, 20).apply { setStroke(dp(1), STROKE) }
+    /** Primary call to action: diagonal violet→cyan gradient. */
+    private fun accentGradient(radius: Int = 16): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(ACCENT, ACCENT2)).apply { cornerRadius = dp(radius).toFloat() }
+    private fun weight(w: Int): Typeface = Typeface.create(Typeface.SANS_SERIF, w, false)
     private fun label(value: String, size: Float = 15f, color: Int = TEXT, bold: Boolean = false): TextView =
         object : TextView(this) { override fun setText(value: CharSequence?, type: BufferType?) { super.setText(NodiText.text(context,value),type) } }.apply {
             text = value
             textSize = size
             setTextColor(color)
-            if (bold) setTypeface(typeface, Typeface.BOLD)
+            typeface = weight(if (!bold) 400 else if (size >= 18f) 800 else 650)
+            if (bold && size >= 18f) letterSpacing = -0.02f
+            if (bold && size <= 11f) letterSpacing = 0.12f
         }
-    private fun button(title: String, primary: Boolean = false, action: () -> Unit): Button = object : Button(this) { override fun setText(value: CharSequence?, type: TextView.BufferType?) { super.setText(NodiText.text(context,value),type) } }.apply {
+    private fun button(title: String, primary: Boolean = false, action: () -> Unit): Button = object : Button(this) {
+        override fun setText(value: CharSequence?, type: TextView.BufferType?) { super.setText(NodiText.text(context,value),type) }
+        override fun setEnabled(enabled: Boolean) { super.setEnabled(enabled); alpha = if (enabled) 1f else 0.42f }
+    }.apply {
         text = title
         isAllCaps = false
-        textSize = 14f
+        textSize = 15f
+        typeface = weight(if (primary) 700 else 600)
         minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
         stateListAnimator = null; elevation = 0f
         maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
         gravity = Gravity.CENTER; setPadding(dp(12), 0, dp(12), 0)
-        setTextColor(if (primary) BACKGROUND else TEXT)
-        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(35,255,255,255)), panelBackground(if (primary) ACCENT else CARD), null)
+        setTextColor(if (primary) Color.WHITE else TEXT)
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(45,255,255,255)),
+            if (primary) accentGradient() else panelBackground(RAISED).apply { setStroke(dp(1), STROKE) }, null)
+        if (primary) { elevation = dp(10).toFloat(); outlineSpotShadowColor = ACCENT; outlineAmbientShadowColor = ACCENT2 }
         setOnClickListener { action() }
     }
     private fun icon(button: Button, kind: String, tint: Int) {
-        val drawable = object : android.graphics.drawable.Drawable() {
+        val drawable = vectorIcon(kind, tint)
+        drawable.setBounds(0,0,dp(20),dp(20))
+        if(button.text.isEmpty()) { button.setPadding(dp(14),0,dp(14),0);button.compoundDrawablePadding=0 }
+        else button.compoundDrawablePadding=dp(8)
+        button.setCompoundDrawables(drawable,null,null,null)
+    }
+    private fun vectorIcon(kind: String, tint: Int): android.graphics.drawable.Drawable {
+        return object : android.graphics.drawable.Drawable() {
             private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = tint; style = android.graphics.Paint.Style.STROKE; strokeWidth = 1.8f; strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND }
             override fun draw(canvas: android.graphics.Canvas) {
                 canvas.save(); canvas.translate(bounds.left.toFloat(),bounds.top.toFloat()); canvas.scale(bounds.width()/24f,bounds.height()/24f)
@@ -251,6 +278,13 @@ class MainActivity : Activity() {
                     "settings" -> { canvas.drawCircle(12f,12f,7f,paint); canvas.drawCircle(12f,12f,2.5f,paint); for(i in 0..7){canvas.save();canvas.rotate(i*45f,12f,12f);canvas.drawLine(12f,2f,12f,5f,paint);canvas.restore()} }
                     "trash" -> { canvas.drawLine(4f,6f,20f,6f,paint); canvas.drawRect(7f,6f,17f,21f,paint); canvas.drawLine(9f,3f,15f,3f,paint) }
                     "send" -> { canvas.drawLine(12f,20f,12f,4f,paint); canvas.drawLine(6f,10f,12f,4f,paint); canvas.drawLine(18f,10f,12f,4f,paint) }
+                    "download" -> { canvas.drawLine(12f,3f,12f,15f,paint); canvas.drawLine(7f,10f,12f,15f,paint); canvas.drawLine(17f,10f,12f,15f,paint); canvas.drawLine(4f,20f,20f,20f,paint) }
+                    "globe" -> { canvas.drawCircle(12f,12f,9f,paint); canvas.drawOval(8f,3f,16f,21f,paint); canvas.drawLine(3f,12f,21f,12f,paint) }
+                    "link" -> { canvas.save(); canvas.rotate(-45f,12f,12f); canvas.drawRoundRect(2.5f,9f,13.5f,15f,3f,3f,paint); canvas.drawRoundRect(10.5f,9f,21.5f,15f,3f,3f,paint); canvas.restore() }
+                    "shield" -> { val path=android.graphics.Path().apply{moveTo(12f,3f);lineTo(19f,6f);lineTo(19f,12f);cubicTo(19f,16.5f,16f,19.5f,12f,21f);cubicTo(8f,19.5f,5f,16.5f,5f,12f);lineTo(5f,6f);close()}; canvas.drawPath(path,paint) }
+                    "chat" -> { canvas.drawRoundRect(3f,4f,21f,17f,4f,4f,paint); canvas.drawLine(8f,17f,7f,21f,paint); canvas.drawLine(7f,21f,12f,17f,paint) }
+                    "text" -> { canvas.drawLine(5f,6f,19f,6f,paint); canvas.drawLine(12f,6f,12f,19f,paint); canvas.drawLine(9f,19f,15f,19f,paint) }
+                    "chevron" -> { canvas.drawLine(9f,6f,15f,12f,paint); canvas.drawLine(15f,12f,9f,18f,paint) }
                     else -> { canvas.drawRoundRect(5f,3f,19f,21f,2f,2f,paint); canvas.drawLine(9f,10f,15f,10f,paint); canvas.drawLine(9f,14f,15f,14f,paint) }
                 }; canvas.restore()
             }
@@ -258,11 +292,37 @@ class MainActivity : Activity() {
             override fun setColorFilter(filter: android.graphics.ColorFilter?) { paint.colorFilter=filter }
             @Deprecated("Android Drawable API") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
         }
-        drawable.setBounds(0,0,dp(20),dp(20))
-        if(button.text.isEmpty()) { button.setPadding(dp(14),0,dp(14),0);button.compoundDrawablePadding=0 }
-        else button.compoundDrawablePadding=dp(8)
-        button.setCompoundDrawables(drawable,null,null,null)
     }
+    /** Secondary action shown as a list row: icon, left-aligned title, chevron. */
+    private fun rowButton(title: String, kind: String, action: () -> Unit): Button = button(title, false, action).apply {
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        setPadding(dp(12), 0, dp(12), 0); compoundDrawablePadding = dp(14)
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(35,255,255,255)), null, panelBackground(Color.WHITE))
+        val start = vectorIcon(kind, ACCENT).apply { setBounds(0,0,dp(20),dp(20)) }
+        val end = vectorIcon("chevron", MUTED).apply { setBounds(0,0,dp(16),dp(16)) }
+        setCompoundDrawables(start, null, end, null)
+    }
+    /** Tinted secondary call to action, e.g. the Internet entry next to Wi-Fi. */
+    private fun tonalButton(title: String, kind: String, action: () -> Unit): Button = button(title, false, action).apply {
+        val tint = Color.rgb(186, 176, 255)
+        setTextColor(tint)
+        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(45,255,255,255)),
+            panelBackground(Color.argb(46, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))).apply {
+                setStroke(dp(1), Color.argb(110, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT))) }, null)
+        icon(this, kind, tint)
+    }
+    private fun tabIcon(tab: Button, kind: String, tint: Int) {
+        val drawable = vectorIcon(kind, tint).apply { setBounds(0,0,dp(20),dp(20)) }
+        tab.setCompoundDrawables(null, drawable, null, null); tab.compoundDrawablePadding = dp(2)
+    }
+    /** Inputs are created with the activity context, so dark-dialog colours are set explicitly. */
+    private fun <T : TextView> T.onDialog(): T = apply {
+        setTextColor(TEXT); setHintTextColor(HINT)
+        backgroundTintList = android.content.res.ColorStateList.valueOf(ACCENT)
+        if (this is android.widget.CompoundButton) buttonTintList = android.content.res.ColorStateList.valueOf(ACCENT)
+    }
+    private fun dialogBox(view: View): View = FrameLayout(this).apply { setPadding(dp(22), dp(8), dp(22), 0); addView(view) }
+    private fun divider(): View = View(this).apply { setBackgroundColor(STROKE) }
     private fun LinearLayout.addItem(view: View, top: Int = 12, height: Int = LinearLayout.LayoutParams.WRAP_CONTENT) {
         addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height).apply { topMargin = dp(top) })
     }
@@ -275,7 +335,7 @@ class MainActivity : Activity() {
             clipToPadding = true
         }
         root.addView(scroll, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply { bottomMargin = dp(76) })
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply { bottomMargin = dp(82) })
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(24))
@@ -298,22 +358,28 @@ class MainActivity : Activity() {
         }
         val header = LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         header.addView(brandMark(),LinearLayout.LayoutParams(dp(40),dp(40)).apply {rightMargin=dp(10)})
-        header.addView(label("nodi",24f,TEXT,true).apply {gravity=Gravity.CENTER_VERTICAL},LinearLayout.LayoutParams(0,dp(44),1f))
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
+        titles.addView(label("nodi",26f,TEXT,true).apply { post { paint.shader = android.graphics.LinearGradient(0f,0f,paint.measureText(text.toString()),0f,
+            intArrayOf(Color.rgb(196,186,255), ACCENT2), null, android.graphics.Shader.TileMode.CLAMP); invalidate() } })
+        titles.addView(label("Файли поруч",13f,MUTED))
+        header.addView(titles,LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f))
         val settings=button(""){setup(false)}.apply { contentDescription=tr("Параметри") }
         icon(settings,"settings",MUTED)
         header.addView(settings,LinearLayout.LayoutParams(dp(44),dp(44)))
         column.addItem(header,0)
-        column.addItem(label("Файли поруч",13f,MUTED),0)
         connectionColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         column.addItem(connectionColumn, 0)
         nearbyRefresh = button("Знайти у Wi-Fi", true) {
             startDiscovery(true)
             requestConnection()
         }
-        icon(nearbyRefresh, "wifi", BACKGROUND)
-        connectionColumn.addItem(nearbyRefresh, 18, dp(48))
+        icon(nearbyRefresh, "wifi", Color.WHITE)
+        val entry = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        entry.addView(nearbyRefresh, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(10) })
+        entry.addView(tonalButton("Інтернет", "globe") { internetSettings() }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        connectionColumn.addItem(entry, 18)
         val deviceCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; background = panelBackground(CARD)
+            orientation = LinearLayout.VERTICAL; background = cardBackground()
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         deviceCard.addItem(label("ПРИСТРОЇ", 11f, MUTED, true), 0)
@@ -325,7 +391,7 @@ class MainActivity : Activity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
         deviceCard.addItem(nearbyPicker, 4, dp(48))
-        scanButton = button("Сканувати QR") { scanInvite() }; icon(scanButton,"qr",TEXT)
+        scanButton = rowButton("Сканувати QR", "qr") { scanInvite() }
         forgetButton = button("") { forgetDevice() }.apply { contentDescription=tr("Видалити") }; icon(forgetButton, "trash", MUTED)
         val deviceActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         deviceActions.gravity=Gravity.END
@@ -336,22 +402,22 @@ class MainActivity : Activity() {
         deviceHeader.addView(deviceHeading,LinearLayout.LayoutParams(0,dp(44),1f))
         deviceActions.removeView(forgetButton);deviceHeader.addView(forgetButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         deviceCard.addView(deviceHeader,0)
-        deviceCard.addItem(scanButton,8,dp(44))
-        deviceCard.addItem(button("Інтернет") { internetSettings() },8,dp(44))
-        deviceCard.addItem(button("Відгук / приватність") { feedbackSettings() },8,dp(44))
-        deviceCard.addItem(button("Адреса / VPN") { editEndpoint() },8,dp(44))
+        deviceCard.addItem(divider(), 12, 1)
+        deviceCard.addItem(scanButton,8,dp(48))
+        deviceCard.addItem(rowButton("Адреса / VPN", "shield") { editEndpoint() },2,dp(48))
+        deviceCard.addItem(rowButton("Відгук / приватність", "chat") { feedbackSettings() },2,dp(48))
         connectionColumn.addItem(deviceCard, 16)
-        val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = panelBackground(CARD); setPadding(dp(4),dp(4),dp(4),dp(4)) }
+        val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = cardBackground(); setPadding(dp(4),dp(4),dp(4),dp(4)) }
         connectTab = button("Підключення") { showTab(0) }
         receiveTab = button("Отримання") { showTab(1) }
         sendTab = button("Надсилання") { showTab(2) }
         textTab = button("Текст") { showTab(3) }
         for (tab in listOf(connectTab, receiveTab, sendTab, textTab)) {
-            tab.textSize = 12f
-            tab.setPadding(dp(2), 0, dp(2), 0)
-            modes.addView(tab, LinearLayout.LayoutParams(0, dp(52), 1f))
+            tab.textSize = 11f
+            tab.setPadding(dp(2), dp(7), dp(2), dp(5))
+            modes.addView(tab, LinearLayout.LayoutParams(0, dp(58), 1f))
         }
-        root.addView(modes, FrameLayout.LayoutParams(-1, dp(60), Gravity.BOTTOM).apply {
+        root.addView(modes, FrameLayout.LayoutParams(-1, dp(66), Gravity.BOTTOM).apply {
             setMargins(dp(12), 0, dp(12), dp(8))
         })
 
@@ -366,13 +432,13 @@ class MainActivity : Activity() {
 
         val fileCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = panelBackground(CARD)
+            background = cardBackground()
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         fileCard.addItem(label("ФАЙЛ", 11f, MUTED, true), 0)
         fileLabel = label("Вибери файл для передачі", 16f, TEXT)
         fileCard.addItem(fileLabel, 8)
-        pickButton = button("Вибрати файл") { chooseFile() }; icon(pickButton, "file", TEXT)
+        pickButton = button("Вибрати файл") { chooseFile() }.apply { background = panelBackground(RAISED) }; icon(pickButton, "file", TEXT)
         fileCard.addItem(pickButton, 14, dp(48))
         sendColumn.addItem(fileCard, 14)
 
@@ -387,7 +453,7 @@ class MainActivity : Activity() {
             maxLines = 3
             filters = arrayOf(InputFilter.LengthFilter(4096))
             setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panelBackground(CARD)
+            background = cardBackground()
             isSaveEnabled = false
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
@@ -402,7 +468,7 @@ class MainActivity : Activity() {
         }
         sendColumn.addItem(pasteButton, 10, dp(46))
         pasteButton.visibility = View.GONE
-        sendButton = button("Надіслати", true) { requestSend() }; icon(sendButton, "send", BACKGROUND)
+        sendButton = button("Надіслати", true) { requestSend() }; icon(sendButton, "send", Color.WHITE)
         sendColumn.addItem(sendButton, 16, dp(48))
         cancelButton = button("Скасувати") {
             selectionEpoch++
@@ -455,7 +521,7 @@ class MainActivity : Activity() {
         textColumn.addItem(textHint, 16)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = panelBackground(CARD)
+            background = cardBackground()
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         card.addItem(label("ТЕКСТ І ПОСИЛАННЯ", 11f, MUTED, true), 0)
@@ -470,20 +536,21 @@ class MainActivity : Activity() {
             maxLines = 6
             filters = arrayOf(InputFilter.LengthFilter(MAX_TEXT_BYTES))
             setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panelBackground(CARD)
+            background = cardBackground()
             isSaveEnabled = false
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         card.addItem(textInput, 10)
-        val paste = button("Вставити з буфера") { pasteText() }
+        val raised = RAISED // buttons inside a CARD need their own surface
+        val paste = button("Вставити") { pasteText() }.apply { background = panelBackground(raised) }
         icon(paste, "file", TEXT)
-        val clear = button("Очистити") { textInput.setText("") }
+        val clear = button("Очистити") { textInput.setText("") }.apply { background = panelBackground(raised) }
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(paste, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(8) })
         actions.addView(clear, LinearLayout.LayoutParams(0, dp(46), 1f))
         card.addItem(actions, 12)
         textSendButton = button("Надіслати текст", true) { sendText() }
-        icon(textSendButton, "send", BACKGROUND)
+        icon(textSendButton, "send", Color.WHITE)
         card.addItem(textSendButton, 12, dp(48))
         textStatus = label("Текст і посилання йдуть напряму підключеному пристрою.", 12f, MUTED)
         card.addItem(textStatus, 10)
@@ -584,7 +651,7 @@ class MainActivity : Activity() {
         for (entry in textHistory) {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = panelBackground(CARD)
+                background = cardBackground()
                 setPadding(dp(14), dp(10), dp(14), dp(10))
             }
             card.addItem(label((if (entry.incoming) "↓ " else "↑ ") + entry.text.replace("\n", " "), 13f, TEXT).apply {
@@ -616,11 +683,11 @@ class MainActivity : Activity() {
         return uri
     }
     private fun feedbackSettings() {
-        val input=EditText(this).apply{hint="Відгук автору (до 1000 символів)";filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}
-        val consent=android.widget.CheckBox(this).apply{text="Ділитися статистикою використання";isChecked=NodiMetrics.consent(this@MainActivity)}
+        val input=EditText(this).apply{hint=tr("Відгук автору (до 1000 символів)");filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}.onDialog()
+        val consent=android.widget.CheckBox(this).apply{text=tr("Ділитися статистикою використання");isChecked=NodiMetrics.consent(this@MainActivity)}.onDialog()
         val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent)}
-        android.app.AlertDialog.Builder(this).setTitle("Відгук і приватність")
-            .setMessage("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів."+(if(BuildConfig.NODI_TEST_INSTALL)" Ця тестова збірка не враховується." else ""))
+        NodiDialog(this).setTitle("Відгук і приватність")
+            .setMessage(tr("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів.")+(if(BuildConfig.NODI_TEST_INSTALL)" "+tr("Ця тестова збірка не враховується.") else ""))
             .setView(box).setPositiveButton("Надіслати відгук"){_,_->
                 NodiMetrics.consent(this,consent.isChecked)
                 val text=input.text.toString().trim()
@@ -630,13 +697,13 @@ class MainActivity : Activity() {
     }
     @Volatile private var roomThread:Thread?=null
     private fun internetSettings() {
-        if(roomThread!=null){android.app.AlertDialog.Builder(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
+        if(roomThread!=null){NodiDialog(this).setTitle("Кімната активна").setMessage("Скасувати очікування підключення?")
             .setPositiveButton("Скасувати кімнату"){_,_->roomThread?.interrupt()}.setNegativeButton("Залишити",null).show();return}
         if(busy || texting || pairing || scanning)return
-        val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true}
-        android.app.AlertDialog.Builder(this).setTitle("Інтернет · кімната")
+        val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true;typeface=Typeface.MONOSPACE;gravity=Gravity.CENTER;textSize=17f;letterSpacing=0.04f}.onDialog()
+        NodiDialog(this).setTitle("Інтернет · кімната")
             .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.")
-            .setView(input).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
+            .setView(dialogBox(input)).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
             .setNeutralButton("Приєднатися"){_,_->internetRoom(input.text.toString())}
             .setNegativeButton("Закрити",null).show()
     }
@@ -654,12 +721,12 @@ class MainActivity : Activity() {
                 val save:(TrustedDevice)->Unit={peer->deviceBook.remember(peer)}
                 if(code==null)rooms.host(own,{value->ui{
                     status.text="Код кімнати: $value"
-                    android.app.AlertDialog.Builder(this).setTitle("Код кімнати").setMessage("$value\n\nПередай код іншій людині. Залиш Nodi відкритим.")
+                    NodiDialog(this).setTitle("Код кімнати").setMessage(value+"\n\n"+tr("Передай код іншій людині. Залиш Nodi відкритим."))
                         .setPositiveButton("Скопіювати"){_,_->(getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Nodi room",value))}
                         .setNegativeButton("Закрити",null).show()
                 }},{name,value->
                     val answer=java.util.concurrent.atomic.AtomicBoolean(false);val latch=java.util.concurrent.CountDownLatch(1)
-                    ui{android.app.AlertDialog.Builder(this).setTitle("Підключити $name?").setMessage("Код кімнати: $value\nПідтверджуй лише очікуваний пристрій.")
+                    ui{NodiDialog(this).setTitle(tr("Підключити")+" $name?").setMessage(tr("Код кімнати:")+" $value\n"+tr("Підтверджуй лише очікуваний пристрій."))
                         .setPositiveButton("Підключити"){_,_->answer.set(true);latch.countDown()}
                         .setNegativeButton("Відхилити"){_,_->latch.countDown()}.setOnCancelListener{latch.countDown()}.show()}
                     latch.await(60,java.util.concurrent.TimeUnit.SECONDS)&&answer.get()
@@ -977,8 +1044,9 @@ class MainActivity : Activity() {
         showingReceive = index == 1
         for ((tab, selected) in listOf(connectTab to (index == 0), receiveTab to (index == 1),
             sendTab to (index == 2), textTab to (index == 3))) {
-            tab.background = panelBackground(if (selected) Color.rgb(46,53,69) else CARD)
-            tab.setTextColor(if (selected) TEXT else MUTED)
+            tab.background = panelBackground(if (selected) RAISED else CARD)
+            tab.setTextColor(if (selected) Color.rgb(196,186,255) else MUTED)
+            tabIcon(tab, when (tab) { connectTab -> "link"; receiveTab -> "download"; sendTab -> "send"; else -> "text" }, if (selected) ACCENT else MUTED)
             tab.isSelected = selected
         }
         connectionColumn.visibility = if (index == 0) View.VISIBLE else View.GONE
@@ -1241,7 +1309,7 @@ class MainActivity : Activity() {
         val ownPin = runCatching { NodiInvite.parse(receiverState.invites.first().code).fingerprint.hex() }.getOrNull()
         val device = nearbyAll.firstOrNull { it.pin != ownPin && it.pin !in saved && it.pin !in discoveryPromptPins } ?: return
         discoveryPromptPins.add(device.pin)
-        discoveryPrompt = android.app.AlertDialog.Builder(this)
+        discoveryPrompt = NodiDialog(this)
             .setTitle(tr("Знайдено пристрій"))
             .setMessage(device.name + "\n\n" + tr("З’єднати через Wi-Fi?"))
             .setPositiveButton(tr("З’єднати")) { _, _ ->
@@ -1269,7 +1337,7 @@ class MainActivity : Activity() {
         val instructions = tr("Спочатку спаруй пристрої через QR або Wi-Fi. У різних мережах потрібен VPN або прямий доступ. Введи IPv4:порт іншого пристрою; після перезапуску приймача порт може змінитися.") +
             "\n\n" + tr("Адреси цього пристрою:") + "\n" + own.ifEmpty { tr("Увімкни приймання, щоб побачити адресу.") }
         if (peer == null) {
-            android.app.AlertDialog.Builder(this).setTitle(tr("Адреса / VPN"))
+            NodiDialog(this).setTitle(tr("Адреса / VPN"))
                 .setMessage(instructions).setPositiveButton(tr("Готово"), null).show()
             return
         }
@@ -1279,9 +1347,9 @@ class MainActivity : Activity() {
             hint = "100.64.0.2:7331"
             filters = arrayOf(InputFilter.LengthFilter(64))
             setText(manualEndpoint(peer.fingerprint) ?: peer.address)
-        }
-        val dialog = android.app.AlertDialog.Builder(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
-            .setMessage(instructions).setView(input)
+        }.onDialog()
+        val dialog = NodiDialog(this).setTitle(peer.name + " · " + tr("Адреса / VPN"))
+            .setMessage(instructions).setView(dialogBox(input))
             .setPositiveButton(tr("Зберегти"), null)
             .setNeutralButton(tr("Автоматично")) { _, _ ->
                 getSharedPreferences("nodi_endpoints", MODE_PRIVATE).edit().remove(peer.fingerprint).apply()
@@ -1352,7 +1420,7 @@ class MainActivity : Activity() {
                 ui { showMode(false); status.text = tr("Підключення збережене"); showConnected(device.name) }
             } catch (e: Exception) {
                 ui { if (!foreground) return@ui
-                    android.app.AlertDialog.Builder(this).setTitle(tr("Не вдалося з’єднати"))
+                    NodiDialog(this).setTitle(tr("Не вдалося з’єднати"))
                     .setMessage(tr("Перевір вибір пристроїв і повтори. Або скористайся QR."))
                     .setPositiveButton(tr("Готово"),null).show() }
             } finally {
@@ -1364,7 +1432,7 @@ class MainActivity : Activity() {
     private fun showPairCode(name: String, compare: String) {
         ui {
             if (!foreground || !pairing) return@ui
-            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("Підтвердь на іншому пристрої"))
+            wifiDialog = NodiDialog(this).setTitle(tr("Підтвердь на іншому пристрої"))
                 .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
                 .setNegativeButton(tr("Скасувати")) { _, _ -> pairClient?.cancel() }
                 .setOnCancelListener { pairClient?.cancel() }.show()
@@ -1374,7 +1442,7 @@ class MainActivity : Activity() {
         if (!foreground) return
         val root = screenRoot ?: return
         val badge = label("✓  " + tr("З’єднано") + "\n" + name, 18f, TEXT, true).apply {
-            gravity = Gravity.CENTER; setPadding(dp(24),dp(24),dp(24),dp(24)); background = panelBackground(CARD)
+            gravity = Gravity.CENTER; setPadding(dp(24),dp(24),dp(24),dp(24)); background = cardBackground()
             elevation = dp(12).toFloat()
         }
         root.addView(badge, FrameLayout.LayoutParams(-1,dp(112),Gravity.CENTER).apply { leftMargin=dp(24); rightMargin=dp(24) })
@@ -1391,7 +1459,7 @@ class MainActivity : Activity() {
         ui {
             if (!foreground) { latch.countDown(); return@ui }
             wifiDecision = latch
-            wifiDialog = android.app.AlertDialog.Builder(this).setTitle(tr("З’єднати пристрої?"))
+            wifiDialog = NodiDialog(this).setTitle(tr("З’єднати пристрої?"))
                 .setMessage(name + "\n\n" + compare + "\n\n" + tr("Коди на обох екранах мають збігатися"))
                 .setPositiveButton(tr("З’єднати")) { _, _ -> answer.set(true); latch.countDown() }
                 .setNegativeButton(tr("Скасувати")) { _, _ -> latch.countDown() }
@@ -1421,7 +1489,7 @@ class MainActivity : Activity() {
     }
     private fun forgetDevice() {
         val device = nearby.getOrNull(nearbyPicker.selectedItemPosition) ?: return
-        android.app.AlertDialog.Builder(this).setTitle(tr("Видалити ${device.name}?"))
+        NodiDialog(this).setTitle(tr("Видалити ${device.name}?"))
             .setMessage(tr("Збережене підключення й доступ до цього телефона буде видалено. Активна передача перерветься. Для повторного підключення скануй новий QR Mac. Пристрій залишиться у Wi-Fi."))
             .setNegativeButton(tr("Скасувати"), null)
             .setPositiveButton(tr("Видалити")) { _, _ ->
@@ -1439,6 +1507,15 @@ class MainActivity : Activity() {
     private var previewKey = ""
     private var screenRoot: FrameLayout? = null
     private fun tr(value: String) = NodiText.text(this, value)
+    /** AlertDialog.Builder that translates titles, messages and button labels like label() does. */
+    private class NodiDialog(private val context: Context) : android.app.AlertDialog.Builder(context) {
+        private fun t(v: CharSequence?) = NodiText.text(context, v)
+        override fun setTitle(title: CharSequence?): android.app.AlertDialog.Builder = super.setTitle(t(title))
+        override fun setMessage(message: CharSequence?): android.app.AlertDialog.Builder = super.setMessage(t(message))
+        override fun setPositiveButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setPositiveButton(t(text), listener)
+        override fun setNegativeButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setNegativeButton(t(text), listener)
+        override fun setNeutralButton(text: CharSequence?, listener: android.content.DialogInterface.OnClickListener?): android.app.AlertDialog.Builder = super.setNeutralButton(t(text), listener)
+    }
     private fun setup(first: Boolean) {
         if (busy || pairing || selecting) return
         val previous=uiPrefs.getString("language","en") ?: "en"
@@ -1458,14 +1535,14 @@ class MainActivity : Activity() {
         box.addItem(title,16)
         val sub=label("Налаштуй Nodi під себе",14f,MUTED);box.addItem(sub,8)
         val languageLabel=label("Мова",12f,MUTED,true);box.addItem(languageLabel,28)
-        val choices=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(6),dp(6),dp(6),dp(6));background=panelBackground(CARD) }
+        val choices=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(6),dp(6),dp(6),dp(6));background=cardBackground() }
         val languageButtons=mutableListOf<Button>()
         fun repaint(){
             val codes=listOf("en","uk","ru")
             languageButtons.forEachIndexed { i,v ->
                 v.text=listOf("English","Українська","Русский")[i]+if(codes[i]==language)"   ✓" else ""
                 v.setTextColor(if(codes[i]==language)ACCENT else TEXT)
-                v.background=panelBackground(if(codes[i]==language)Color.rgb(39,45,61) else CARD)
+                v.background=panelBackground(if(codes[i]==language)RAISED else CARD)
             }
         }
         listOf("en","uk","ru").forEachIndexed { i,code ->
@@ -1476,8 +1553,8 @@ class MainActivity : Activity() {
         box.addItem(choices,10)
         fun toggle(text:String,checked:Boolean)=android.widget.Switch(this).apply {
             this.text=tr(text);textSize=14f;setTextColor(TEXT);isChecked=checked;minHeight=dp(48);switchPadding=dp(16)
-            thumbTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(ACCENT,Color.rgb(151,158,174)))
-            trackTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(Color.rgb(67,79,125),Color.rgb(48,53,64)))
+            thumbTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(ACCENT,MUTED))
+            trackTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(Color.rgb(74,64,160),STROKE))
         }
         val previews=toggle("Прев’ю файлів",uiPrefs.getBoolean("previews",true))
         val motion=toggle("Менше анімацій",uiPrefs.getBoolean("reduce_motion",false))
@@ -1534,14 +1611,14 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(18))
             background=android.graphics.drawable.GradientDrawable().apply {
-                setColor(CARD);cornerRadius=dp(24).toFloat();setStroke(dp(1),Color.rgb(62,69,88))
+                setColor(CARD);cornerRadius=dp(24).toFloat();setStroke(dp(1),STROKE)
             }
             elevation=dp(18).toFloat()
         }
-        val handle=View(this).apply { background=panelBackground(Color.rgb(66,73,91)) }
+        val handle=View(this).apply { background=panelBackground(STROKE) }
         card.addView(handle,LinearLayout.LayoutParams(dp(30),dp(3)).apply { gravity=Gravity.CENTER_HORIZONTAL;bottomMargin=dp(12) })
         val heading=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
-        heading.addView(label("✓  "+tr("Файл отримано"),12f,Color.rgb(116,220,178),true),LinearLayout.LayoutParams(0,dp(32),1f))
+        heading.addView(label("✓  "+tr("Файл отримано"),12f,SUCCESS,true),LinearLayout.LayoutParams(0,dp(32),1f))
         heading.addView(button("×") { root.removeView(card);if(previewCard===card)previewCard=null }.apply {
             contentDescription=tr("Закрити");textSize=22f
         },LinearLayout.LayoutParams(dp(36),dp(36)))
@@ -1551,7 +1628,7 @@ class MainActivity : Activity() {
             setImageResource(android.R.drawable.ic_menu_save)
             imageTintList=android.content.res.ColorStateList.valueOf(ACCENT)
             setPadding(dp(15),dp(15),dp(15),dp(15))
-            background=panelBackground(Color.rgb(38,44,60));clipToOutline=true
+            background=panelBackground(RAISED);clipToOutline=true
             scaleType=android.widget.ImageView.ScaleType.CENTER_CROP;contentDescription=name
         }
         header.addView(image,LinearLayout.LayoutParams(dp(72),dp(72)))

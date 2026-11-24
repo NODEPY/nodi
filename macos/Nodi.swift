@@ -58,13 +58,25 @@ final class FlippedDocumentView: NSView {
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { highlight(false) }
 }
 
+/// "Aurora night" palette shared with Android: inky background, violet→cyan accent.
+enum NodiPalette {
+    static let background = NSColor(srgbRed: 11/255, green: 12/255, blue: 21/255, alpha: 1)
+    static let card = NSColor(srgbRed: 21/255, green: 23/255, blue: 38/255, alpha: 1)
+    static let raised = NSColor(srgbRed: 31/255, green: 34/255, blue: 54/255, alpha: 1)
+    static let stroke = NSColor(srgbRed: 42/255, green: 46/255, blue: 71/255, alpha: 1)
+    static let text = NSColor(srgbRed: 244/255, green: 245/255, blue: 251/255, alpha: 1)
+    static let accent = NSColor(srgbRed: 139/255, green: 124/255, blue: 255/255, alpha: 1)
+    static let accent2 = NSColor(srgbRed: 76/255, green: 201/255, blue: 240/255, alpha: 1)
+    static let accentText = NSColor(srgbRed: 196/255, green: 186/255, blue: 255/255, alpha: 1)
+}
+
 final class CardView: NSView {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
-        layer?.backgroundColor = NSColor(srgbRed: 25/255, green: 28/255, blue: 35/255, alpha: 1).cgColor
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        layer?.backgroundColor = NodiPalette.card.cgColor
+        layer?.borderColor = NodiPalette.stroke.cgColor
         layer?.borderWidth = 1
-        layer?.cornerRadius = 16
+        layer?.cornerRadius = 18
     }
 }
 
@@ -206,10 +218,10 @@ final class NodiSetup:NSObject {
         self.panel=NSPanel(contentRect:NSRect(x:0,y:0,width:440,height:530),styleMask:[.titled,.fullSizeContentView],backing:.buffered,defer:false)
         super.init()
         self.panel.titleVisibility = .hidden;self.panel.titlebarAppearsTransparent=true;self.panel.isReleasedWhenClosed=false
-        self.panel.appearance=NSAppearance(named:.darkAqua);self.panel.backgroundColor=NSColor(srgbRed:16/255,green:18/255,blue:23/255,alpha:1)
+        self.panel.appearance=NSAppearance(named:.darkAqua);self.panel.backgroundColor=NodiPalette.background
         let root=NSView();self.panel.contentView=root
         let brand=NodiLabel(labelWithString:"nodi");brand.font = .systemFont(ofSize:24,weight:.bold)
-        let hero=NSImageView();hero.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");hero.contentTintColor=NSColor(srgbRed:160/255,green:177/255,blue:1,alpha:1);hero.imageScaling = .scaleProportionallyUpOrDown
+        let hero=NSImageView();hero.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");hero.contentTintColor=NodiPalette.accent;hero.imageScaling = .scaleProportionallyUpOrDown
         hero.heightAnchor.constraint(equalToConstant:64).isActive=true;hero.widthAnchor.constraint(equalToConstant:64).isActive=true
         self.heading.font = .systemFont(ofSize:25,weight:.semibold)
         self.subtitle.font = .systemFont(ofSize:13);self.subtitle.textColor = .secondaryLabelColor
@@ -290,7 +302,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let path = self.preferences.string(forKey: "inbox") { return URL(fileURLWithPath: path, isDirectory: true) }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Nodi", isDirectory: true)
     }()
-    private lazy var deviceDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Nodi/Devices", isDirectory: true)
+    /// NODI_SNAPSHOT=<file.png>: render the main window for documentation and quit.
+    /// Uses an empty temporary device store and starts no receiver or discovery.
+    private let snapshotPath = ProcessInfo.processInfo.environment["NODI_SNAPSHOT"]
+    private lazy var deviceDirectory: URL = self.snapshotPath != nil
+        ? FileManager.default.temporaryDirectory.appendingPathComponent("nodi-snapshot-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Nodi/Devices", isDirectory: true)
     private let receiveButton = NodiButton(title: "Увімкнути приймання", target: nil, action: nil)
     private let receiveStatus = NodiLabel(labelWithString: "Приймання вимкнене")
     private let folderLabel = NodiLabel(labelWithString: "")
@@ -317,6 +334,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let activity = NSTextView()
     private let spinner = NSProgressIndicator()
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let path = self.snapshotPath {
+            self.makeMenu(); self.buildWindow()
+            if let root=self.window.contentView { self.translateUI(root) }
+            self.window.setContentSize(NSSize(width: 860, height: 900))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.writeSnapshot(to: path); NSApp.terminate(nil) }
+            return
+        }
         if !self.preferences.bool(forKey:"nodi.setup") { self.showSetup(first:true) }
         self.makeMenu(); self.buildWindow()
         if let root=self.window.contentView { self.translateUI(root) }
@@ -326,6 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Only paired-device capabilities can upload. New devices require a displayed QR.
         self.toggleReceive()
         NSApp.activate(ignoringOtherApps: true)
+    }
+    private func writeSnapshot(to path: String) {
+        guard let frame = self.window.contentView?.superview,
+              let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+        frame.cacheDisplay(in: frame.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -362,7 +392,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildWindow() {
         self.window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         self.window.appearance = NSAppearance(named: .darkAqua)
-        self.window.backgroundColor = NSColor(srgbRed: 16/255, green: 18/255, blue: 23/255, alpha: 1)
+        // Blend the titlebar into the window. Snapshot mode keeps the plain titlebar
+        // because cacheDisplay renders nothing for full-size content views.
+        if self.snapshotPath == nil { self.window.styleMask.insert(.fullSizeContentView); self.window.titlebarAppearsTransparent = true; self.window.titleVisibility = .hidden }
+        self.window.backgroundColor = NodiPalette.background
         self.window.title = "Nodi"; self.window.contentMinSize = NSSize(width: 760, height: 600); self.window.isReleasedWhenClosed = false; self.window.center()
         let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; self.window.contentView = scroll
         let root = FlippedDocumentView(); root.wantsLayer=true; root.layer?.backgroundColor=self.window.backgroundColor.cgColor; scroll.documentView = root; root.translatesAutoresizingMaskIntoConstraints = false
@@ -380,14 +413,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.folderLabel.stringValue = self.inbox.lastPathComponent; self.folderLabel.toolTip = self.inbox.path; self.folderLabel.lineBreakMode = .byTruncatingMiddle
         self.fileLabel.lineBreakMode = .byTruncatingMiddle
         self.spinner.style = .spinning; self.spinner.controlSize = .small; self.spinner.isDisplayedWhenStopped = false
-        let title = self.label("nodi", size: 26, bold: true)
+        let title = self.label("nodi", size: 28, bold: true)
+        if let rounded = NSFont.systemFont(ofSize: 28, weight: .heavy).fontDescriptor.withDesign(.rounded) { title.font = NSFont(descriptor: rounded, size: 28) }
+        title.textColor = NodiPalette.accentText
         let mark=NSImageView();mark.image=NSImage(contentsOfFile:Bundle.main.path(forResource:"NodiMark",ofType:"png") ?? "");mark.imageScaling = .scaleProportionallyUpOrDown
         mark.widthAnchor.constraint(equalToConstant:40).isActive=true;mark.heightAnchor.constraint(equalToConstant:40).isActive=true
         self.addButton.title = "QR"; self.forgetButton.title = "Видалити"
         self.chooseButton.title = "Вибрати файл"; self.sendButton.title = "Надіслати"; self.folderButton.title = "Змінити"
-        let accent = NSColor(srgbRed: 160/255, green: 177/255, blue: 255/255, alpha: 1)
-        for button in [refresh, self.sendButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .black; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 40).isActive = true }
+        let accent = NodiPalette.accent
+        for button in [refresh, self.sendButton, self.sendTextButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
         self.symbol(refresh,"wifi"); self.symbol(self.addButton,"qrcode"); self.symbol(self.forgetButton,"trash")
+        internet.tonal = true; internet.font = .systemFont(ofSize: 14, weight: .semibold); internet.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        self.symbol(internet,"globe")
         self.symbol(self.chooseButton,"doc.badge.plus"); self.symbol(self.sendButton,"arrow.up"); self.symbol(open,"folder")
         self.forgetButton.contentTintColor = .secondaryLabelColor
         self.deviceHint.font = .systemFont(ofSize: 12); self.deviceHint.textColor = .secondaryLabelColor
@@ -395,7 +432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.fileLabel.font = .systemFont(ofSize: 15, weight: .medium)
         self.devicePicker.controlSize = .large; self.devicePicker.heightAnchor.constraint(equalToConstant:38).isActive=true
         let endpointButton = NodiButton(title: "Адреса / VPN", target: self, action: #selector(editEndpoint)); endpointButton.bezelStyle = .rounded
-        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), refresh]), self.devicePicker, self.row([internet, self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
+        self.symbol(endpointButton,"lock.shield")
+        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), internet, refresh]), self.devicePicker, self.row([self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
         let network = NodiButton(title: "Мережа…", target: self, action: #selector(showNetwork)); network.bezelStyle = .rounded
         let receive = self.card([self.label("Отримати", size: 15, bold: true), self.receiveStatus, self.receiveButton, self.folderLabel, self.row([self.folderButton,open,network])])
         self.receiveStatus.maximumNumberOfLines=2
@@ -405,7 +443,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let text = self.card([self.label("Текст і посилання", size: 15, bold: true), self.textScroll, self.row([self.pasteTextButton, self.sendTextButton, NSView()]), self.textStatus, self.textHistoryStack])
         let logScroll = NSScrollView(); logScroll.hasVerticalScroller = true; logScroll.borderType = .bezelBorder; logScroll.heightAnchor.constraint(equalToConstant: 90).isActive = true; logScroll.isHidden = true; self.logPanel = logScroll
         self.activity.isEditable = false; self.activity.isVerticallyResizable = true; self.activity.autoresizingMask = [.width]; self.activity.textContainer?.widthTracksTextView = true; self.activity.textContainerInset = NSSize(width: 8, height: 8); logScroll.documentView = self.activity
-        self.textScroll.hasVerticalScroller = true; self.textScroll.borderType = .bezelBorder
+        self.textScroll.hasVerticalScroller = true; self.textScroll.borderType = .noBorder
+        self.textScroll.drawsBackground = true; self.textScroll.backgroundColor = NodiPalette.raised
+        self.textScroll.wantsLayer = true; self.textScroll.layer?.cornerRadius = 12; self.textScroll.layer?.masksToBounds = true
+        self.textScroll.layer?.borderWidth = 1; self.textScroll.layer?.borderColor = NodiPalette.stroke.cgColor
+        self.textInput.backgroundColor = NodiPalette.raised; self.textInput.textColor = NodiPalette.text; self.textInput.insertionPointColor = NodiPalette.accentText
         self.textScroll.heightAnchor.constraint(equalToConstant: 96).isActive = true
         self.textInput.isRichText = false; self.textInput.isAutomaticQuoteSubstitutionEnabled = false; self.textInput.isAutomaticDashSubstitutionEnabled = false
         self.textInput.font = .systemFont(ofSize: 13); self.textInput.isVerticallyResizable = true
@@ -420,12 +462,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.symbol(settingsButton,"gearshape");settingsButton.toolTip=NodiL("Параметри");settingsButton.setAccessibilityLabel(NodiL("Параметри"));settingsButton.title=""
         settingsButton.widthAnchor.constraint(equalToConstant:36).isActive=true
         let feedback=NodiButton(title:"Відгук",target:self,action:#selector(feedbackSettings));feedback.bezelStyle = .rounded
-        let header=self.row([mark,title,NSView(),feedback,settingsButton])
+        self.symbol(feedback,"bubble.left")
+        let subtitle=self.label("Файли поруч", size: 13); subtitle.textColor = .secondaryLabelColor
+        let titles=NSStackView(views:[title,subtitle]); titles.orientation = .vertical; titles.alignment = .leading; titles.spacing = 0
+        let header=self.row([mark,titles,NSView(),feedback,settingsButton])
         let transfers=NSStackView(views:[send,receive]);transfers.orientation = .horizontal;transfers.alignment = .top;transfers.distribution = .fillEqually;transfers.spacing=16
         send.heightAnchor.constraint(equalTo:receive.heightAnchor).isActive=true
-        let stack = NSStackView(views: [header, self.label("Файли поруч", size: 13), connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
+        let stack = NSStackView(views: [header, connection, transfers, text, self.row([details, self.lastEvent]), logScroll])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 20), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)])
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: root.topAnchor, constant: self.snapshotPath == nil ? 40 : 20), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)])
         for v in [header, connection, transfers, text, logScroll] { v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         self.renderDevices(); self.setBusy(false); self.renderTextHistory(); self.window.makeKeyAndOrderFront(nil)
     }
@@ -498,12 +543,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NodiEndpoint.normalize(value)
     }
     @objc private func feedbackSettings() {
-        let alert=NSAlert();alert.messageText="Відгук і приватність"
-        alert.informativeText="Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів." + (NodiInternet.testInstall ? " Ця тестова збірка не враховується." : "")
-        let input=NSTextField(frame:NSRect(x:0,y:36,width:380,height:60));input.placeholderString="Відгук автору (до 1000 символів)"
-        let consent=NSButton(checkboxWithTitle:"Ділитися статистикою використання",target:nil,action:nil);consent.frame=NSRect(x:0,y:0,width:380,height:28);consent.state=UserDefaults.standard.bool(forKey:"nodi.usageConsent") ? .on : .off
+        let alert=NSAlert();alert.messageText=NodiL("Відгук і приватність")
+        alert.informativeText=NodiL("Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів.") + (NodiInternet.testInstall ? " " + NodiL("Ця тестова збірка не враховується.") : "")
+        let input=NSTextField(frame:NSRect(x:0,y:36,width:380,height:60));input.placeholderString=NodiL("Відгук автору (до 1000 символів)")
+        let consent=NSButton(checkboxWithTitle:NodiL("Ділитися статистикою використання"),target:nil,action:nil);consent.frame=NSRect(x:0,y:0,width:380,height:28);consent.state=UserDefaults.standard.bool(forKey:"nodi.usageConsent") ? .on : .off
         let view=NSView(frame:NSRect(x:0,y:0,width:380,height:100));view.addSubview(input);view.addSubview(consent);alert.accessoryView=view
-        alert.addButton(withTitle:"Надіслати відгук");alert.addButton(withTitle:"Зберегти");alert.addButton(withTitle:"Закрити")
+        alert.addButton(withTitle:NodiL("Надіслати відгук"));alert.addButton(withTitle:NodiL("Зберегти"));alert.addButton(withTitle:NodiL("Закрити"))
         let result=alert.runModal();guard result != .alertThirdButtonReturn else{return}
         UserDefaults.standard.set(consent.state == .on,forKey:"nodi.usageConsent");NodiInternet.usage("active")
         if result == .alertFirstButtonReturn {
@@ -515,14 +560,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func internetSettings() {
         if self.roomActive {
-            let alert=NSAlert();alert.messageText="Кімната активна";alert.informativeText="Скасувати очікування підключення?";alert.addButton(withTitle:"Залишити");alert.addButton(withTitle:"Скасувати кімнату")
+            let alert=NSAlert();alert.messageText=NodiL("Кімната активна");alert.informativeText=NodiL("Скасувати очікування підключення?");alert.addButton(withTitle:NodiL("Залишити"));alert.addButton(withTitle:NodiL("Скасувати кімнату"))
             if alert.runModal() == .alertSecondButtonReturn {self.pendingInternetCommand=nil;self.receiver?.command("room_cancel");self.roomActive=false};return
         }
         guard self.sender == nil && !self.stopping else{return}
-        let alert=NSAlert();alert.messageText="Інтернет · кімната"
-        alert.informativeText="Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл."
+        let alert=NSAlert();alert.messageText=NodiL("Інтернет · кімната")
+        alert.informativeText=NodiL("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл.")
         let input=NSTextField(frame:NSRect(x:0,y:0,width:360,height:28));input.placeholderString="XXXX-XXXX-XXXX-XXXX"
-        alert.accessoryView=input;alert.addButton(withTitle:"Створити кімнату");alert.addButton(withTitle:"Приєднатися");alert.addButton(withTitle:"Закрити")
+        alert.accessoryView=input;alert.addButton(withTitle:NodiL("Створити кімнату"));alert.addButton(withTitle:NodiL("Приєднатися"));alert.addButton(withTitle:NodiL("Закрити"))
         let result=alert.runModal()
         guard result != .alertThirdButtonReturn else{return}
         self.roomActive=true
@@ -761,9 +806,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let code=event.code {do{try NodiInternet.activate(code);NodiInternet.usage("active")}catch{self.log("Не вдалося зберегти інтернет-доступ у Keychain")}}
         case "room_code":
             if let code=event.code {
-                self.deviceHint.stringValue="Код кімнати: " + code + " · 5 хвилин"
-                let alert=NSAlert();alert.messageText="Код кімнати";alert.informativeText=code + "\n\nПередай іншій людині й залиш Nodi відкритим."
-                alert.addButton(withTitle:"Скопіювати");alert.addButton(withTitle:"Закрити")
+                self.deviceHint.stringValue=NodiL("Код кімнати:") + " " + code + " · " + NodiL("5 хвилин")
+                let alert=NSAlert();alert.messageText=NodiL("Код кімнати");alert.informativeText=code + "\n\n" + NodiL("Передай іншій людині й залиш Nodi відкритим.")
+                alert.addButton(withTitle:NodiL("Скопіювати"));alert.addButton(withTitle:NodiL("Закрити"))
                 if alert.runModal() == .alertFirstButtonReturn {NSPasteboard.general.clearContents();NSPasteboard.general.setString(code,forType:.string)}
             }
         case "room_closed": self.roomActive=false
@@ -1139,6 +1184,41 @@ func NodiL(_ original: String) -> String {
 }
 private let nodiWords: [String:[String]] = [
 "Зберегти": ["Save", "Сохранить"],
+"Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів.": ["Only the author sees feedback. Statistics are optional: active installs and transfer counts, without file names, texts or contacts. Kept for up to 30 days.", "Отзыв видит только автор. Статистика добровольная: активные установки и количество передач, без имён файлов, текстов и контактов. Хранится до 30 дней."],
+"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 16 MiB per file.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 16 MiB на файл."],
+"Передай іншій людині й залиш Nodi відкритим.": ["Share it with the other person and keep Nodi open.", "Передай другому человеку и оставь Nodi открытым."],
+"5 хвилин": ["5 minutes", "5 минут"],
+"Інтернет · кімната": ["Internet · room", "Интернет · комната"],
+"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 16 MiB per file. Receiving must be on.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 16 MiB на файл. Приём должен быть включён."],
+"Створити кімнату": ["Create room", "Создать комнату"],
+"Приєднатися": ["Join", "Присоединиться"],
+"Кімната активна": ["Room is active", "Комната активна"],
+"Скасувати очікування підключення?": ["Stop waiting for the connection?", "Отменить ожидание подключения?"],
+"Скасувати кімнату": ["Cancel room", "Отменить комнату"],
+"Залишити": ["Keep", "Оставить"],
+"Код кімнати": ["Room code", "Код комнаты"],
+"Код кімнати:": ["Room code:", "Код комнаты:"],
+"Передай код іншій людині. Залиш Nodi відкритим.": ["Share the code with the other person. Keep Nodi open.", "Передай код другому человеку. Оставь Nodi открытым."],
+"Скопіювати": ["Copy", "Скопировать"],
+"Підключити": ["Connect", "Подключить"],
+"Підтверджуй лише очікуваний пристрій.": ["Only approve the device you expect.", "Подтверждай только ожидаемое устройство."],
+"Відхилити": ["Decline", "Отклонить"],
+"Не вдалося підключитися": ["Could not connect", "Не удалось подключиться"],
+"Спробуй новий код кімнати": ["Try a new room code", "Попробуй новый код комнаты"],
+"Очікую підтвердження власника кімнати…": ["Waiting for the room owner to approve…", "Жду подтверждения владельца комнаты…"],
+"Пристрій підключено · увімкни приймання": ["Device connected · turn on receiving", "Устройство подключено · включи приём"],
+"Підключаю інтернет…": ["Connecting to the Internet…", "Подключаю интернет…"],
+"Відгук і приватність": ["Feedback and privacy", "Отзыв и приватность"],
+"Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів.": ["Only the author sees feedback. Statistics are optional: active installs and transfer counts, without file names, texts or contacts. Kept for up to 30 days.", "Отзыв видит только автор. Статистика добровольная: активные установки и количество передач, без имён файлов, текстов и контактов. Хранится до 30 дней."],
+"Ця тестова збірка не враховується.": ["This test build is not counted.", "Эта тестовая сборка не учитывается."],
+"Відгук автору (до 1000 символів)": ["Feedback for the author (up to 1000 characters)", "Отзыв автору (до 1000 символов)"],
+"Ділитися статистикою використання": ["Share usage statistics", "Делиться статистикой использования"],
+"Надіслати відгук": ["Send feedback", "Отправить отзыв"],
+"Відгук надіслано": ["Feedback sent", "Отзыв отправлен"],
+"Відгук не надіслано · спробуй пізніше": ["Feedback not sent · try again later", "Отзыв не отправлен · попробуй позже"],
+"Кімнату скасовано": ["Room cancelled", "Комната отменена"],
+"Інтернет": ["Internet", "Интернет"],
+"Відгук": ["Feedback", "Отзыв"],
 "Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
 "Адреса вручну": ["Manual address", "Адрес вручную"],
 "Автоматично": ["Automatic", "Автоматически"],
@@ -1355,20 +1435,24 @@ private let nodiWords: [String:[String]] = [
 final class NodiLabel:NSTextField { override var stringValue:String { get { super.stringValue } set { super.stringValue=NodiL(newValue) } } }
 final class NodiButton:NSButton {
     var primary=false { didSet { needsDisplay=true } }
+    /// Secondary call to action: translucent accent fill with accent text.
+    var tonal=false { didSet { needsDisplay=true } }
     override var title:String { get { super.title } set { super.title=NodiL(newValue);invalidateIntrinsicContentSize();needsDisplay=true } }
     override var intrinsicContentSize:NSSize {
-        let width=(self.title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13,weight:.medium)]).width
+        let width=(self.title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:13.5,weight:.bold)]).width
         return NSSize(width:max(36,width+28+(self.image == nil ? 0 : (self.title.isEmpty ? 0 : 22))),height:36)
     }
     override func draw(_ dirtyRect:NSRect) {
-        let accent=NSColor(srgbRed:160/255,green:177/255,blue:1,alpha:1)
-        let surface=NSColor(srgbRed:38/255,green:43/255,blue:53/255,alpha:1)
-        let alpha:CGFloat=self.isEnabled ? 1 : 0.38
-        let fill=self.primary ? accent : surface
-        fill.withAlphaComponent(self.isHighlighted ? 0.65 : alpha).setFill()
-        NSBezierPath(roundedRect:self.bounds.insetBy(dx:1,dy:1),xRadius:10,yRadius:10).fill()
-        let color=(self.primary ? NSColor(srgbRed:16/255,green:18/255,blue:23/255,alpha:1) : NSColor(srgbRed:231/255,green:235/255,blue:244/255,alpha:1)).withAlphaComponent(alpha)
-        let attrs:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:13,weight:.medium),.foregroundColor:color]
+        let alpha:CGFloat=(self.isEnabled ? 1 : 0.42)*(self.isHighlighted ? 0.75 : 1)
+        let shape=NSBezierPath(roundedRect:self.bounds.insetBy(dx:1,dy:1),xRadius:12,yRadius:12)
+        if self.primary {
+            NSGradient(starting:NodiPalette.accent.withAlphaComponent(alpha),ending:NodiPalette.accent2.withAlphaComponent(alpha))?.draw(in:shape,angle:-20)
+        } else {
+            (self.tonal ? NodiPalette.accent.withAlphaComponent(0.18*alpha) : NodiPalette.raised.withAlphaComponent(alpha)).setFill(); shape.fill()
+            (self.tonal ? NodiPalette.accent.withAlphaComponent(0.45*alpha) : NodiPalette.stroke.withAlphaComponent(alpha)).setStroke(); shape.lineWidth=1; shape.stroke()
+        }
+        let color=(self.primary ? NSColor.white : (self.tonal ? NodiPalette.accentText : NodiPalette.text)).withAlphaComponent(alpha)
+        let attrs:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:13.5,weight:self.primary ? .bold : .semibold),.foregroundColor:color]
         let size=(self.title as NSString).size(withAttributes:attrs)
         let imageWidth:CGFloat=self.image == nil ? 0 : (self.title.isEmpty ? 16 : 22)
         let x=max(10,(self.bounds.width-size.width-imageWidth)/2)
@@ -1379,7 +1463,7 @@ final class NodiButton:NSButton {
         }
         (self.title as NSString).draw(at:NSPoint(x:x+imageWidth,y:(self.bounds.height-size.height)/2),withAttributes:attrs)
         if self.window?.firstResponder === self {
-            accent.withAlphaComponent(0.8).setStroke();let ring=NSBezierPath(roundedRect:self.bounds.insetBy(dx:2,dy:2),xRadius:9,yRadius:9);ring.lineWidth=2;ring.stroke()
+            NodiPalette.accentText.withAlphaComponent(0.8).setStroke();let ring=NSBezierPath(roundedRect:self.bounds.insetBy(dx:2,dy:2),xRadius:11,yRadius:11);ring.lineWidth=2;ring.stroke()
         }
     }
 }
