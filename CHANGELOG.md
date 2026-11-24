@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-alpha.7 — 2026-11-24
+
+### ✨ New look
+
+- **"Aurora night" design** on Android and macOS: inky background, violet→cyan gradient buttons with a soft glow, bordered cards and bolder typography.
+- **Internet** is now a button right next to **Find on Wi-Fi**; QR, Address / VPN and Feedback are clear icon rows.
+- Android: dark branded dialogs, icons on the bottom tabs, readable inputs in dialogs.
+- macOS: titlebar blends into the window; text field and buttons follow the new palette.
+
+### 🛠 Fixes
+
+- Internet room and feedback dialogs are translated into English and Russian (they were always shown in Ukrainian).
+- Disabled buttons now look disabled.
+
 ## 1.0.0-alpha.6 — 2026-11-23
 
 ### ✨ New

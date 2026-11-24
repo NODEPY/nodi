@@ -57,8 +57,6 @@ Pinned TLS 1.3 runs device-to-device, even through the relay. No account, no upl
 <img src="docs/images/macos.png" alt="Nodi for macOS" width="80%">
 </details>
 
-<sub>Screenshots show the current development build.</sub>
-
 ## How it works
 
 ```mermaid
@@ -158,7 +156,7 @@ The last command runs the Kotlin ↔ Go transport integration tests (JDK 25, no 
 <details>
 <summary><b>Versioning</b></summary>
 
-The latest release is **1.0.0-alpha.6** (tag `v1.0.0-alpha.6`). Prereleases use `MAJOR.MINOR.PATCH-alpha.N`, stable releases `MAJOR.MINOR.PATCH`. Android `versionName` matches the release; `versionCode` increases for each distributed build (currently 6). macOS uses `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 8`; increase the build number for each distributed build. Go **1.22** is the minimum toolchain in `go.mod`, not the app version.
+The latest release is **1.0.0-alpha.7** (tag `v1.0.0-alpha.7`). Prereleases use `MAJOR.MINOR.PATCH-alpha.N`, stable releases `MAJOR.MINOR.PATCH`. Android `versionName` matches the release; `versionCode` increases for each distributed build (currently 7). macOS uses `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 9`; increase the build number for each distributed build. Go **1.22** is the minimum toolchain in `go.mod`, not the app version.
 
 </details>
 
