@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Landing page in `site/` (EN/UK/RU, picks the right download for the visitor's device, Mac install command, Android QR on other desktops), served as free static assets on Cloudflare: https://nodi.igor-shura2011faik.workers.dev
 - macOS one-command installer (`scripts/install-macos.sh`): downloads the latest release, verifies its SHA-256, installs into /Applications and keeps settings. No Gatekeeper prompt because curl downloads are not quarantined.
 - README: macOS install section with the macOS 15+ path (System Settings → Privacy & Security → Open Anyway); the right-click → Open shortcut no longer works there.
 
