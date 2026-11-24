@@ -1,3 +1,18 @@
+# Relay capacity and Alpha 9 (2026-11-24)
+
+- Long-poll: clients send `X-Nodi-Wait: 1` to /v1/incoming; the relay holds up to 50 s and
+  wakes the receiver after the new session is saved. First poll after start or an error is
+  immediate (status shows at once); quick empty answers or errors pause 10 s; answers with
+  only in-progress sessions pause 1 s (this prevented a re-poll storm that hit the
+  120/min rate limit). The allowlist is re-read when sessions arrive (room-paired peers).
+- Writes: rate windows, presence and per-frame counters are in memory / WebSocket
+  attachments; save() skips empty transactions; the alarm is set only when it changes.
+  Free plan: 100k Worker requests/day and 100k DO rows written/day.
+- Limits: MAX_DEVICES 1000, MAX_SESSIONS 32, presence 75 s. Deployed before the release;
+  public interop passed with both the new clients and Alpha 8 clients (main) against it.
+
+---
+
 # Landing page (2026-11-24)
 
 - Live at https://getnodi.pages.dev — a classic Cloudflare Pages project `getnodi` (no account subdomain

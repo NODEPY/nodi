@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.9 — 2026-11-24
+
+### ⚡ Faster Internet transfers, room for more people
+
+- Receivers now long-poll the relay: a transfer starts as soon as it is sent instead of after up to 10 seconds, and each receiving device makes ~5x fewer requests.
+- Relay polling and forwarding no longer write to storage, so the free Cloudflare plan is no longer exhausted by a handful of devices.
+- Relay capacity raised to 1000 devices and 32 simultaneous transfers. Alpha 6–8 keep working unchanged.
+- Fixed: a device paired through a room while the receiver was waiting could have its first transfer rejected.
+
+### 🌍 Getting Nodi
 
 - Landing page in `site/` (English by default, Ukrainian and Russian on request; picks the right download for the visitor's device, Mac install command, Android QR on other desktops), served as free static assets on Cloudflare: https://getnodi.pages.dev
 - macOS one-command installer (`scripts/install-macos.sh`): downloads the latest release, verifies its SHA-256, installs into /Applications and keeps settings. No Gatekeeper prompt because curl downloads are not quarantined.
