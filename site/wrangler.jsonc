@@ -1,9 +1,0 @@
-{
-  // Static landing page: assets only, no Worker script, so every request is a free
-  // static-asset request and does not count toward the relay's Workers request quota.
-  "name": "nodi",
-  "compatibility_date": "2026-08-06",
-  "assets": { "directory": "./public", "html_handling": "auto-trailing-slash", "not_found_handling": "404-page" },
-  "workers_dev": true,
-  "observability": { "enabled": false }
-}
