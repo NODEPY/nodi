@@ -443,7 +443,7 @@ class MainActivity : Activity() {
         sendColumn.addItem(fileCard, 14)
 
         code = EditText(this).apply {
-            hint = "Скануй QR або встав код nodi1-…"
+            hint = tr("Скануй QR або встав код nodi1-…")
             textSize = 13f
             typeface = Typeface.MONOSPACE
             setTextColor(TEXT)
@@ -526,7 +526,7 @@ class MainActivity : Activity() {
         }
         card.addItem(label("ТЕКСТ І ПОСИЛАННЯ", 11f, MUTED, true), 0)
         textInput = EditText(this).apply {
-            hint = "Встав текст або посилання"
+            hint = tr("Встав текст або посилання")
             textSize = 15f
             setTextColor(TEXT)
             setHintTextColor(MUTED)
