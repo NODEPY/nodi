@@ -16,7 +16,7 @@ End-to-end encrypted. No accounts. No cloud storage.
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Android-4CC9F0)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[Releases](https://github.com/NODEPY/nodi/releases) · [What's new](CHANGELOG.md) · [Internet rooms](docs/INTERNET-ALPHA.md) · [CLI](docs/CLI.md) · [Security](SECURITY.md)
+[**Website**](https://nodi.igor-shura2011faik.workers.dev) · [Releases](https://github.com/NODEPY/nodi/releases) · [What's new](CHANGELOG.md) · [Internet rooms](docs/INTERNET-ALPHA.md) · [CLI](docs/CLI.md) · [Security](SECURITY.md)
 
 <img src="docs/images/hero.png" alt="Nodi on macOS and Android" width="100%">
 

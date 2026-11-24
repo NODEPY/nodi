@@ -1,3 +1,17 @@
+# Landing page (2026-11-24)
+
+- `site/public` is a static page (no Worker script, no trackers); `site/wrangler.jsonc`
+  deploys it as Worker static assets named `nodi` → https://nodi.igor-shura2011faik.workers.dev
+  Static-asset requests are free and do not count toward the relay's 100k/day quota.
+- Deploy: `cd server/cloudflare && npx wrangler deploy --config ../../site/wrangler.jsonc`.
+  Preview locally: `python3 -m http.server 8137 --directory site/public`.
+- Download buttons use the counted /download links; checking them with a browser-like
+  User-Agent counts a download (curl's default UA is not counted).
+- English is the default; UK/RU only after the visitor picks them (saved in localStorage).
+  Texts live in the inline EN/UK/RU dictionary in index.html; images come from docs/images.
+
+---
+
 # Alpha 8 release (2026-11-24)
 
 - `v1.0.0-alpha.8`: full English/Russian translations (PR #8), Android 1.0.0-alpha.8 / 8,
