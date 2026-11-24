@@ -7,7 +7,8 @@
   Preview locally: `python3 -m http.server 8137 --directory site/public`.
 - Download buttons use the counted /download links; checking them with a browser-like
   User-Agent counts a download (curl's default UA is not counted).
-- Texts live in the inline EN/UK/RU dictionary in index.html; images come from docs/images.
+- English is the default; UK/RU only after the visitor picks them (saved in localStorage).
+  Texts live in the inline EN/UK/RU dictionary in index.html; images come from docs/images.
 
 ---
 
