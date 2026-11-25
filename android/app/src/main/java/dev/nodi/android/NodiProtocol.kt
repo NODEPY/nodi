@@ -83,7 +83,11 @@ class ReceiverRejected(message: String) : IOException(message)
 const val MAX_TEXT_BYTES = 64 * 1024
 
 /** One instance per upload. cancel() may safely be called from the UI thread. */
-class NodiTransfer(private val internet: NodiInternet? = null) {
+/**
+ * [relayOnly] is the app's Internet mode: skip the direct address and go through the relay at once.
+ * Without it the relay is only a fallback after a failed direct connection (null [internet] = Wi-Fi only).
+ */
+class NodiTransfer(private val internet: NodiInternet? = null, private val relayOnly: Boolean = false) {
     companion object { const val MAX_BYTES = 2L * 1024 * 1024 * 1024 }
     private val cancelled = AtomicBoolean(false)
     private val timedOut = AtomicBoolean(false)
@@ -220,13 +224,21 @@ class NodiTransfer(private val internet: NodiInternet? = null) {
         }
         val context = SSLContext.getInstance("TLS")
         context.init(null, arrayOf<TrustManager>(trust), SecureRandom())
-        var raw = track(java.net.Socket())
-        try { raw.connect(InetSocketAddress(invite.host,invite.port),4_000) }
-        catch(error:IOException) {
-            raw.close();checkActive()
-            val relay=internet ?: throw error
+        val viaRelay={
+            val relay=internet ?: throw IOException("Інтернет ще не підключено: створи кімнату або введи код")
             if(size>16L*1024*1024)throw IOException("Інтернет-альфа: файл має бути не більшим за 16 MiB")
-            raw=track(relay.dial(invite.fingerprint.hex()){checkActive()})
+            track(relay.dial(invite.fingerprint.hex()){checkActive()})
+        }
+        var raw: java.net.Socket
+        if(relayOnly) raw=viaRelay()
+        else {
+            raw = track(java.net.Socket())
+            try { raw.connect(InetSocketAddress(invite.host,invite.port),4_000) }
+            catch(error:IOException) {
+                raw.close();checkActive()
+                if(internet==null)throw error
+                raw=viaRelay()
+            }
         }
         val socket = track(context.socketFactory.createSocket(raw,invite.host.hostAddress,invite.port,true) as SSLSocket)
         try {

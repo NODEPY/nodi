@@ -315,6 +315,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let devicePicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let addButton = NodiButton(title: "Додати телефон — QR", target: nil, action: nil)
     private let forgetButton = NodiButton(title: "Видалити пристрій", target: nil, action: nil)
+    // Route toggle: Wi-Fi sends directly only, Internet goes through the relay only.
+    private let wifiModeButton = NodiButton(title: "Wi-Fi", target: nil, action: nil)
+    private let internetModeButton = NodiButton(title: "Інтернет", target: nil, action: nil)
+    private let refreshButton = NodiButton(title: "Знайти у Wi-Fi", target: nil, action: nil)
+    private let roomButton = NodiButton(title: "Кімната", target: nil, action: nil)
+    private let endpointButton = NodiButton(title: "Адреса / VPN", target: nil, action: nil)
+    private let routeHint = NodiLabel(labelWithString: "")
+    private var routeInternet = UserDefaults.standard.string(forKey: "nodi.route") == "internet"
     private let addressPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let deviceHint = NodiLabel(wrappingLabelWithString: "Скануй QR камерою телефона один раз — потім надсилай файли в обидва боки.")
     private let chooseButton = NodiButton(title: "Вибрати файл…", target: nil, action: nil)
@@ -407,8 +415,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.wire(self.pasteTextButton, #selector(pasteText)); self.wire(self.sendTextButton, #selector(sendText))
         self.devicePicker.target = self; self.devicePicker.action = #selector(deviceChanged)
         self.addressPicker.target = self; self.addressPicker.action = #selector(addressChanged)
-        let internet = NodiButton(title:"Інтернет",target:self,action:#selector(internetSettings));internet.bezelStyle = .rounded
-        let refresh = NodiButton(title: "Знайти у Wi-Fi", target: self, action: #selector(refreshDevices)); refresh.bezelStyle = .rounded
+        let internet = self.roomButton; self.wire(internet, #selector(internetSettings))
+        let refresh = self.refreshButton; self.wire(refresh, #selector(refreshDevices))
         let open = NodiButton(title: "Відкрити", target: self, action: #selector(openInbox)); open.bezelStyle = .rounded
         self.folderLabel.stringValue = self.inbox.lastPathComponent; self.folderLabel.toolTip = self.inbox.path; self.folderLabel.lineBreakMode = .byTruncatingMiddle
         self.fileLabel.lineBreakMode = .byTruncatingMiddle
@@ -421,9 +429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.addButton.title = "QR"; self.forgetButton.title = "Видалити"
         self.chooseButton.title = "Вибрати файл"; self.sendButton.title = "Надіслати"; self.folderButton.title = "Змінити"
         let accent = NodiPalette.accent
-        for button in [refresh, self.sendButton, self.sendTextButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
+        for button in [refresh, internet, self.sendButton, self.sendTextButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
         self.symbol(refresh,"wifi"); self.symbol(self.addButton,"qrcode"); self.symbol(self.forgetButton,"trash")
-        internet.tonal = true; internet.font = .systemFont(ofSize: 14, weight: .semibold); internet.heightAnchor.constraint(equalToConstant: 42).isActive = true
         self.symbol(internet,"globe")
         self.symbol(self.chooseButton,"doc.badge.plus"); self.symbol(self.sendButton,"arrow.up"); self.symbol(open,"folder")
         self.forgetButton.contentTintColor = .secondaryLabelColor
@@ -431,9 +438,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.font = .systemFont(ofSize: 13); self.sendStatus.textColor = .secondaryLabelColor
         self.fileLabel.font = .systemFont(ofSize: 15, weight: .medium)
         self.devicePicker.controlSize = .large; self.devicePicker.heightAnchor.constraint(equalToConstant:38).isActive=true
-        let endpointButton = NodiButton(title: "Адреса / VPN", target: self, action: #selector(editEndpoint)); endpointButton.bezelStyle = .rounded
+        let endpointButton = self.endpointButton; self.wire(endpointButton, #selector(editEndpoint))
         self.symbol(endpointButton,"lock.shield")
-        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), internet, refresh]), self.devicePicker, self.row([self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
+        self.wire(self.wifiModeButton, #selector(chooseWifiRoute)); self.wire(self.internetModeButton, #selector(chooseInternetRoute))
+        for mode in [self.wifiModeButton, self.internetModeButton] { mode.font = .systemFont(ofSize: 14, weight: .semibold); mode.heightAnchor.constraint(equalToConstant: 38).isActive = true; mode.widthAnchor.constraint(equalToConstant: 132).isActive = true }
+        self.symbol(self.wifiModeButton, "wifi"); self.symbol(self.internetModeButton, "globe")
+        let routeSwitch = self.row([self.wifiModeButton, self.internetModeButton]); routeSwitch.spacing = 4
+        self.routeHint.font = .systemFont(ofSize: 12); self.routeHint.textColor = .secondaryLabelColor
+        let connection = self.card([self.row([self.label("Пристрої", size: 15, bold: true), NSView(), routeSwitch]), self.row([refresh, internet, self.routeHint, NSView()]), self.devicePicker, self.row([self.addButton, endpointButton, NSView(), self.forgetButton]), self.deviceHint])
+        self.renderRoute()
         let network = NodiButton(title: "Мережа…", target: self, action: #selector(showNetwork)); network.bezelStyle = .rounded
         let receive = self.card([self.label("Отримати", size: 15, bold: true), self.receiveStatus, self.receiveButton, self.folderLabel, self.row([self.folderButton,open,network])])
         self.receiveStatus.maximumNumberOfLines=2
@@ -658,8 +671,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.wifiArmedPin = nil
             self.receiver?.command("wifi_select", pin: "*")
         }
-        if let peer = self.selectedDevice() {
-            self.deviceHint.stringValue = self.manualEndpoint(peer.fingerprint).map { NodiL("Адреса вручну") + " · " + $0 } ?? (self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : (NodiInternet.load() != nil ? "Спробуємо через інтернет · увімкни приймання" : "Офлайн · увімкни приймання на телефоні"))
+        if self.routeInternet {
+            self.deviceHint.stringValue = NodiInternet.load() == nil ? "Інтернет ще не підключено: створи кімнату або введи код"
+                : (self.selectedDevice() != nil ? "Через інтернет · на іншому пристрої має бути ввімкнене приймання" : "Створи кімнату або введи код, щоб додати пристрій")
+        } else if let peer = self.selectedDevice() {
+            self.deviceHint.stringValue = self.manualEndpoint(peer.fingerprint).map { NodiL("Адреса вручну") + " · " + $0 } ?? (self.discovered.contains { $0.pin == peer.fingerprint } ? "Готовий до передачі" : "Не знайдено в цій мережі · увімкни приймання або перемкни на «Інтернет»")
         } else { self.deviceHint.stringValue = "Скануй новий QR телефоном" };self.setBusy(self.sender != nil)
     }
     @objc private func refreshDevices() { self.discoveryPromptPins.removeAll(); self.browser.refresh(); if self.receiver == nil { self.toggleReceive() } else { self.receiver?.command("wifi_select", pin: "*") } }
@@ -898,7 +914,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.stringValue = NodiL("Готово до передачі")
         self.setBusy(false)
     }
+    @objc private func chooseWifiRoute() { self.setRoute(false) }
+    @objc private func chooseInternetRoute() { self.setRoute(true) }
+    private func setRoute(_ internet: Bool) {
+        guard self.sender == nil else { return }
+        self.routeInternet = internet
+        UserDefaults.standard.set(internet ? "internet" : "wifi", forKey: "nodi.route")
+        self.renderRoute()
+    }
+    /// The toggle decides both how devices are added and how files and text travel.
+    private func renderRoute() {
+        self.wifiModeButton.primary = !self.routeInternet; self.internetModeButton.primary = self.routeInternet
+        self.refreshButton.isHidden = self.routeInternet; self.addButton.isHidden = self.routeInternet; self.endpointButton.isHidden = self.routeInternet
+        self.roomButton.isHidden = !self.routeInternet
+        self.routeHint.stringValue = NodiL(self.routeInternet ? "Через зашифрований relay · до 16 MiB на файл" : "Напряму в одній мережі · до 2 GiB на файл")
+        if self.window != nil { self.deviceChanged() }
+    }
+    private var routeArgument: String { self.routeInternet ? "internet" : "wifi" }
     private func setBusy(_ busy: Bool) {
+        self.wifiModeButton.isEnabled = !busy; self.internetModeButton.isEnabled = !busy
         self.pulse(self.sendButton,enabled:busy)
         self.pulse(self.sendTextButton,enabled:busy && self.sendingText)
         self.chooseButton.isEnabled = !busy; self.sendButton.isEnabled = !busy && self.selectedDevice() != nil; self.cancelButton.isEnabled = busy || !self.selectedFiles.isEmpty
@@ -929,7 +963,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sendStatus.stringValue="\(self.batchSent+1)/\(self.batchTotal) · \(file.lastPathComponent)"
         var failure:String?=nil
         do {
-            try task.start(arguments:["send","-json","-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
+            try task.start(arguments:["send","-json","-route",self.routeArgument,"-code-stdin","-file",file.path],stdin:code,onEvent:{[weak self] event in
                 guard let self=self else{return}
                 if event.type=="route"{self.sendStatus.stringValue=NodiL("Інтернет · ")+file.lastPathComponent}
                 else if event.type=="sent"{self.sendConfirmed=true;NodiInternet.usage("file")}
@@ -997,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.setBusy(true)
         self.textStatus.stringValue = NodiL("Надсилаю текст…")
         do {
-            try task.start(arguments: ["send-text", "-json", "-stdin"], stdin: stdin, onEvent: { [weak self] event in
+            try task.start(arguments: ["send-text", "-json", "-route", self.routeArgument, "-stdin"], stdin: stdin, onEvent: { [weak self] event in
                 guard let self = self else { return }
                 if event.type == "error" || event.type == "fatal" {
                     self.textStatus.stringValue = event.message ?? NodiL("Не вдалося надіслати")
@@ -1254,6 +1288,13 @@ private let nodiWords: [String:[String]] = [
 "Інтернет": ["Internet", "Интернет"],
 "Відгук": ["Feedback", "Отзыв"],
 "Підтримати автора": ["Support the author", "Поддержать автора"],
+"Кімната": ["Room", "Комната"],
+"Через інтернет · на іншому пристрої має бути ввімкнене приймання": ["Over the Internet · receiving must be on on the other device", "Через интернет · на другом устройстве должен быть включён приём"],
+"Створи кімнату або введи код, щоб додати пристрій": ["Create a room or enter a code to add a device", "Создай комнату или введи код, чтобы добавить устройство"],
+"Не знайдено в цій мережі · увімкни приймання або перемкни на «Інтернет»": ["Not found on this network · turn on receiving or switch to «Internet»", "Не найдено в этой сети · включи приём или переключись на «Интернет»"],
+"Через зашифрований relay · до 16 MiB на файл": ["Through the encrypted relay · up to 16 MiB per file", "Через зашифрованный relay · до 16 MiB на файл"],
+"Напряму в одній мережі · до 2 GiB на файл": ["Directly on the same network · up to 2 GiB per file", "Напрямую в одной сети · до 2 GiB на файл"],
+"Інтернет ще не підключено: створи кімнату або введи код": ["Internet is not set up yet: create a room or enter a code", "Интернет ещё не подключён: создай комнату или введи код"],
 "Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
 "Адреса вручну": ["Manual address", "Адрес вручную"],
 "Автоматично": ["Automatic", "Автоматически"],

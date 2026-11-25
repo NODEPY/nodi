@@ -7,6 +7,9 @@ import "errors"
 // is rejected with a protocol error instead.
 var ErrBusy = errors.New("receiver busy")
 
+// ErrNoRelay is returned in Internet mode when this device has not joined the relay yet.
+var ErrNoRelay = errors.New("Інтернет ще не підключено: створи кімнату або введи код")
+
 const (
 	MaxTransfers = 2
 	maxPairing   = 2

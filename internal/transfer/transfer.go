@@ -55,10 +55,13 @@ type Progress struct {
 // Share it only with the intended sender through a trusted channel.
 type Invite struct {
 	// Fallback is used only after TCP dial failure, never after TLS or delivery.
-	Fallback    func() (net.Conn, error) `json:"-"`
-	Address     string                   `json:"address"`
-	Token       string                   `json:"token"`
-	Fingerprint string                   `json:"fingerprint"`
+	Fallback func() (net.Conn, error) `json:"-"`
+	// RelayOnly skips the direct TCP attempt and goes through Fallback at once
+	// (the Internet mode of the apps). Without Fallback the send fails with ErrNoRelay.
+	RelayOnly   bool   `json:"-"`
+	Address     string `json:"address"`
+	Token       string `json:"token"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 func (i Invite) Encode() string {
@@ -419,9 +422,17 @@ func dialPinned(invite Invite) (*tls.Conn, error) {
 			return nil
 		},
 	}
-	raw, err := net.DialTimeout("tcp", invite.Address, 4*time.Second)
-	if err != nil && invite.Fallback != nil {
+	var raw net.Conn
+	if invite.RelayOnly {
+		if invite.Fallback == nil {
+			return nil, ErrNoRelay
+		}
 		raw, err = invite.Fallback()
+	} else {
+		raw, err = net.DialTimeout("tcp", invite.Address, 4*time.Second)
+		if err != nil && invite.Fallback != nil {
+			raw, err = invite.Fallback()
+		}
 	}
 	if err != nil {
 		return nil, err
