@@ -49,6 +49,7 @@ import javax.net.ssl.SSLHandshakeException
 
 class MainActivity : Activity() {
     private companion object {
+        const val SUPPORT_URL = "https://getnodi.pages.dev/#support"
         const val PICK_FILE = 301
         const val PICK_FOLDER = 401
         const val RECEIVE_NETWORK_PERMISSION = 402
@@ -282,6 +283,7 @@ class MainActivity : Activity() {
                     "globe" -> { canvas.drawCircle(12f,12f,9f,paint); canvas.drawOval(8f,3f,16f,21f,paint); canvas.drawLine(3f,12f,21f,12f,paint) }
                     "link" -> { canvas.save(); canvas.rotate(-45f,12f,12f); canvas.drawRoundRect(2.5f,9f,13.5f,15f,3f,3f,paint); canvas.drawRoundRect(10.5f,9f,21.5f,15f,3f,3f,paint); canvas.restore() }
                     "shield" -> { val path=android.graphics.Path().apply{moveTo(12f,3f);lineTo(19f,6f);lineTo(19f,12f);cubicTo(19f,16.5f,16f,19.5f,12f,21f);cubicTo(8f,19.5f,5f,16.5f,5f,12f);lineTo(5f,6f);close()}; canvas.drawPath(path,paint) }
+                    "heart" -> { val path=android.graphics.Path().apply{moveTo(12f,20f);cubicTo(5f,15f,3f,11.5f,3f,8.5f);cubicTo(3f,6f,5f,4f,7.5f,4f);cubicTo(9.5f,4f,11f,5.2f,12f,7f);cubicTo(13f,5.2f,14.5f,4f,16.5f,4f);cubicTo(19f,4f,21f,6f,21f,8.5f);cubicTo(21f,11.5f,19f,15f,12f,20f);close()}; canvas.drawPath(path,paint) }
                     "chat" -> { canvas.drawRoundRect(3f,4f,21f,17f,4f,4f,paint); canvas.drawLine(8f,17f,7f,21f,paint); canvas.drawLine(7f,21f,12f,17f,paint) }
                     "text" -> { canvas.drawLine(5f,6f,19f,6f,paint); canvas.drawLine(12f,6f,12f,19f,paint); canvas.drawLine(9f,19f,15f,19f,paint) }
                     "chevron" -> { canvas.drawLine(9f,6f,15f,12f,paint); canvas.drawLine(15f,12f,9f,18f,paint) }
@@ -685,7 +687,8 @@ class MainActivity : Activity() {
     private fun feedbackSettings() {
         val input=EditText(this).apply{hint=tr("Відгук автору (до 1000 символів)");filters=arrayOf(android.text.InputFilter.LengthFilter(1000))}.onDialog()
         val consent=android.widget.CheckBox(this).apply{text=tr("Ділитися статистикою використання");isChecked=NodiMetrics.consent(this@MainActivity)}.onDialog()
-        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent)}
+        val support=tonalButton("Підтримати автора","heart"){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(SUPPORT_URL)))}catch(_:Exception){status.text="Не вдалося відкрити посилання"}}
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(8),dp(20),dp(8));addView(input);addView(consent);addItem(support,12,dp(44))}
         NodiDialog(this).setTitle("Відгук і приватність")
             .setMessage(tr("Відгук бачить лише автор. Статистика добровільна: активні встановлення та кількість передач, без імен файлів, текстів і контактів. Зберігається до 30 днів.")+(if(BuildConfig.NODI_TEST_INSTALL)" "+tr("Ця тестова збірка не враховується.") else ""))
             .setView(box).setPositiveButton("Надіслати відгук"){_,_->

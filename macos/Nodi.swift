@@ -543,12 +543,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let value = self.preferences.string(forKey: "nodi.endpoint." + pin) else { return nil }
         return NodiEndpoint.normalize(value)
     }
+    @objc private func openSupport() { if let url=URL(string:"https://getnodi.pages.dev/#support") { NSWorkspace.shared.open(url) } }
     @objc private func feedbackSettings() {
         let alert=NSAlert();alert.messageText=NodiL("Відгук і приватність")
         alert.informativeText=NodiL("Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів.") + (NodiInternet.testInstall ? " " + NodiL("Ця тестова збірка не враховується.") : "")
         let input=NSTextField(frame:NSRect(x:0,y:36,width:380,height:60));input.placeholderString=NodiL("Відгук автору (до 1000 символів)")
         let consent=NSButton(checkboxWithTitle:NodiL("Ділитися статистикою використання"),target:nil,action:nil);consent.frame=NSRect(x:0,y:0,width:380,height:28);consent.state=UserDefaults.standard.bool(forKey:"nodi.usageConsent") ? .on : .off
-        let view=NSView(frame:NSRect(x:0,y:0,width:380,height:100));view.addSubview(input);view.addSubview(consent);alert.accessoryView=view
+        let support=NodiButton(title:"Підтримати автора",target:self,action:#selector(openSupport));support.tonal=true;self.symbol(support,"heart");support.frame=NSRect(x:0,y:0,width:220,height:32)
+        input.frame.origin.y=72;consent.frame.origin.y=36
+        let view=NSView(frame:NSRect(x:0,y:0,width:380,height:136));view.addSubview(input);view.addSubview(consent);view.addSubview(support);alert.accessoryView=view
         alert.addButton(withTitle:NodiL("Надіслати відгук"));alert.addButton(withTitle:NodiL("Зберегти"));alert.addButton(withTitle:NodiL("Закрити"))
         let result=alert.runModal();guard result != .alertThirdButtonReturn else{return}
         UserDefaults.standard.set(consent.state == .on,forKey:"nodi.usageConsent");NodiInternet.usage("active")
@@ -1250,6 +1253,7 @@ private let nodiWords: [String:[String]] = [
 "Кімнату скасовано": ["Room cancelled", "Комната отменена"],
 "Інтернет": ["Internet", "Интернет"],
 "Відгук": ["Feedback", "Отзыв"],
+"Підтримати автора": ["Support the author", "Поддержать автора"],
 "Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
 "Адреса вручну": ["Manual address", "Адрес вручную"],
 "Автоматично": ["Automatic", "Автоматически"],

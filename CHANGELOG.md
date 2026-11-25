@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- «Support the author» button in the Feedback dialog on Android and macOS; it opens the support section of the website. Support links on the website and in the README.
+
 ## 1.0.0-alpha.9 — 2026-11-24
 
 ### ⚡ Faster Internet transfers, room for more people
