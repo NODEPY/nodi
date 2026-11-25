@@ -1,7 +1,7 @@
 # Nodi — handoff for a new session
 
-Last updated: 2026-11-25 · `main` at `f15e310` (Merge PR #13, Alpha 9) · working tree clean
-· no open pull requests. Everything below "History" is older checkpoint notes, newest first;
+Last updated: 2026-11-25 · `main` at `057b122` (Merge PR #15, support the author) · no open
+pull requests. Everything below "History" is older checkpoint notes, newest first;
 where they disagree with this section, this section wins.
 
 ## 1. Status in one minute
@@ -37,6 +37,8 @@ It is baked into released apps (Go `internal/internet/client.go` const `Server`,
 `NodiInternet.SERVER`), README buttons and the landing page. Changing the account subdomain
 would break Internet transfers in every released build. Only a custom domain + a new app
 release can remove it.
+
+| Donations | https://ko-fi.com/nodepy_nodi | Owner's Ko-fi (personal PayPal). Linked from the landing `#support` section, README and `.github/FUNDING.yml`. The apps' «Підтримати автора» button opens `getnodi.pages.dev/#support`, so the donation link changes on the site only. Landing deployed 2026-11-25 with this section. |
 
 ## 3. Repository map
 
@@ -226,6 +228,8 @@ Gradle may treat tests as up-to-date and print nothing — use `--rerun-tasks` t
 - Translate parts before concatenating — a combined string is not in the table.
 
 ## 12. Known gaps and ideas (roughly by priority)
+
+0. The «Support the author» button (PR #15) is in `main` but not in any release yet — it ships with Alpha 10. Its CI macOS job was still queued when the owner chose to merge.
 
 1. **Promotion** (owner's current goal) — Appendix A; then AlternativeTo, PRs to awesome
    lists, DOU/Telegram (Ukrainian), Product Hunt only after notarization.
