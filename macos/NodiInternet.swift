@@ -5,6 +5,9 @@ import CryptoKit
 enum NodiInternet {
     static let service = "dev.nodi.internet.v1"
     static let prefix = "nodi-internet1-"
+    /// Snapshot mode (NODI_SNAPSHOT) renders a throwaway window: it must never read or
+    /// change the owner's Keychain, which would also ask for the login password.
+    static let isolated = ProcessInfo.processInfo.environment["NODI_SNAPSHOT"] != nil
     static var ownPin: String? {
         let path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Nodi/Devices/identity.json")
         guard let data = try? Data(contentsOf:path),
@@ -13,6 +16,7 @@ enum NodiInternet {
         return SHA256.hash(data:certificate).map{String(format:"%02x",$0)}.joined()
     }
     static func load() -> [String:String]? {
+        if isolated { return nil }
         let query:[String:Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay",kSecReturnData as String:true]
         var result:CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary,&result)==errSecSuccess,
@@ -21,6 +25,7 @@ enum NodiInternet {
         return config
     }
     static func clear() {
+        if isolated { return }
         SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay"] as CFDictionary)
     }
     static func activate(_ code:String) throws {
@@ -32,6 +37,7 @@ enum NodiInternet {
               let token=config["token"],token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,
               let pin=config["fingerprint"],pin==ownPin else{throw invalid()}
         let clean=try JSONSerialization.data(withJSONObject:["fingerprint":pin,"token":token])
+        if isolated { return }
         let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay"]
         var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:clean] as CFDictionary)
         if status==errSecItemNotFound { var item=query;item[kSecValueData as String]=clean;status=SecItemAdd(item as CFDictionary,nil) }
