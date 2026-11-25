@@ -15,33 +15,60 @@ enum NodiInternet {
               let encoded = object["Certificate"] as? String, let certificate = Data(base64Encoded:encoded) else {return nil}
         return SHA256.hash(data:certificate).map{String(format:"%02x",$0)}.joined()
     }
+    /// Relay credentials live next to the device identity (Devices/ is 0700, the file 0600).
+    /// Alpha 6–9 kept them in the Keychain, but an ad-hoc signed app changes its signature on
+    /// every update and macOS then asks for the login password; a private file avoids that.
+    static var storeURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Nodi/Devices/internet.json")
+    }
+    nonisolated(unsafe) private static var keychainChecked = false
+    private static let keychainQuery: [String:Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay"]
+    private static func parse(_ data: Data) -> [String:String]? {
+        guard let config = try? JSONSerialization.jsonObject(with:data) as? [String:String],
+              let token = config["token"], token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,
+              let pin = config["fingerprint"], pin == ownPin else { return nil }
+        return ["fingerprint":pin,"token":token]
+    }
+    private static func store(_ config: [String:String]) throws {
+        let dir = storeURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let data = try JSONSerialization.data(withJSONObject:config)
+        let temp = dir.appendingPathComponent(".internet.json.\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath:temp.path,contents:data,attributes:[.posixPermissions:0o600]) else {
+            throw NSError(domain:"Nodi",code:2,userInfo:[NSLocalizedDescriptionKey:"Не вдалося зберегти інтернет-доступ"])
+        }
+        guard rename(temp.path, storeURL.path) == 0 else {
+            try? FileManager.default.removeItem(at:temp)
+            throw NSError(domain:NSPOSIXErrorDomain,code:Int(errno))
+        }
+    }
     static func load() -> [String:String]? {
         if isolated { return nil }
-        let query:[String:Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay",kSecReturnData as String:true]
-        var result:CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary,&result)==errSecSuccess,
-              let data=result as? Data,let config=try? JSONSerialization.jsonObject(with:data) as? [String:String],
-              config["fingerprint"]==ownPin else{return nil}
+        if let data = try? Data(contentsOf:storeURL) { return parse(data) }
+        // One-time move from the Keychain of Alpha 6–9: at most one macOS prompt per launch,
+        // and none again once the file exists.
+        guard !keychainChecked else { return nil }
+        keychainChecked = true
+        var query = keychainQuery; query[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary,&result) == errSecSuccess,
+              let data = result as? Data, let config = parse(data) else { return nil }
+        try? store(config)
         return config
     }
     static func clear() {
         if isolated { return }
-        SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay"] as CFDictionary)
+        try? FileManager.default.removeItem(at:storeURL)
+        SecItemDelete(keychainQuery as CFDictionary)
     }
     static func activate(_ code:String) throws {
         func invalid()->NSError {NSError(domain:"Nodi",code:1,userInfo:[NSLocalizedDescriptionKey:"Код не підходить цьому пристрою."])}
         guard code.hasPrefix(prefix),code.count<2048 else{throw invalid()}
         var base=String(code.dropFirst(prefix.count)).replacingOccurrences(of:"-",with:"+").replacingOccurrences(of:"_",with:"/")
         base += String(repeating:"=",count:(4-base.count%4)%4)
-        guard let data=Data(base64Encoded:base),let config=try? JSONSerialization.jsonObject(with:data) as? [String:String],
-              let token=config["token"],token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,
-              let pin=config["fingerprint"],pin==ownPin else{throw invalid()}
-        let clean=try JSONSerialization.data(withJSONObject:["fingerprint":pin,"token":token])
+        guard let data=Data(base64Encoded:base), let config=parse(data) else{throw invalid()}
         if isolated { return }
-        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"relay"]
-        var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:clean] as CFDictionary)
-        if status==errSecItemNotFound { var item=query;item[kSecValueData as String]=clean;status=SecItemAdd(item as CFDictionary,nil) }
-        guard status==errSecSuccess else{throw NSError(domain:NSOSStatusErrorDomain,code:Int(status))}
+        try store(config)
     }
     static var testInstall:Bool {Bundle.main.object(forInfoDictionaryKey:"NodiTestInstall") as? Bool ?? true}
     static func request(_ path:String, payload:[String:Any], completion: @escaping (Bool)->Void) {

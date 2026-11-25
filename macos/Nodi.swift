@@ -823,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.offerNearbyDevice()
         case "forgotten": self.log("Пристрій видалено. Його попередній ключ більше не дозволяє надсилати сюди файли.")
         case "internet_activation":
-            if let code=event.code {do{try NodiInternet.activate(code);NodiInternet.usage("active")}catch{self.log("Не вдалося зберегти інтернет-доступ у Keychain")}}
+            if let code=event.code {do{try NodiInternet.activate(code);NodiInternet.usage("active")}catch{self.log("Не вдалося зберегти інтернет-доступ")}}
         case "room_code":
             if let code=event.code {
                 self.deviceHint.stringValue=NodiL("Код кімнати:") + " " + code + " · " + NodiL("5 хвилин")
@@ -1246,7 +1246,7 @@ private let nodiWords: [String:[String]] = [
 "Не вдалося надіслати відгук": ["Could not send feedback", "Не удалось отправить отзыв"],
 "Інтернет доступний для спроби": ["Internet available to try", "Интернет доступен для попытки"],
 "Спробуємо через інтернет · увімкни приймання": ["Will try over the Internet · turn on receiving", "Попробуем через интернет · включи приём"],
-"Не вдалося зберегти інтернет-доступ у Keychain": ["Could not save Internet access to Keychain", "Не удалось сохранить интернет-доступ в Keychain"],
+"Не вдалося зберегти інтернет-доступ": ["Could not save Internet access", "Не удалось сохранить интернет-доступ"],
 "Пристрій підключено через інтернет": ["Device connected over the Internet", "Устройство подключено через интернет"],
 "Помилка Nodi": ["Nodi error", "Ошибка Nodi"],
 "Інтернет · ": ["Internet · ", "Интернет · "],

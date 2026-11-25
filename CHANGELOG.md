@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- macOS: Internet credentials move from the Keychain to a private file next to the device identity (`~/Library/Application Support/Nodi/Devices/internet.json`, 0600). Updates no longer ask for the login password; the first launch after updating moves the old Keychain entry once.
 - Wi-Fi / Internet toggle on Android and macOS replaces the two connect buttons. Wi-Fi sends only directly (up to 2 GiB); Internet goes straight through the relay without the 4-second direct attempt. The choice is remembered; receiving still works both ways. CLI: `-route auto|wifi|internet` for `send` and `send-text`.
 - «Support the author» button in the Feedback dialog on Android and macOS; it opens the support section of the website. Support links on the website and in the README.
 
