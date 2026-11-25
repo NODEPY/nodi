@@ -40,3 +40,6 @@ jobs:
       - name: Swift endpoint validation
         if: runner.os == 'macOS'
         run: bash scripts/check-endpoint-macos.sh
+      - name: Mac relay credential storage
+        if: runner.os == 'macOS'
+        run: bash scripts/check-internet-store-macos.sh
