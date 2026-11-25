@@ -1,4 +1,305 @@
-# Relay capacity and Alpha 9 (2026-11-24)
+# Nodi — handoff for a new session
+
+Last updated: 2026-11-25 · `main` at `f15e310` (Merge PR #13, Alpha 9) · working tree clean
+· no open pull requests. Everything below "History" is older checkpoint notes, newest first;
+where they disagree with this section, this section wins.
+
+## 1. Status in one minute
+
+- **Product:** Nodi sends files, text and links between a Mac (Apple Silicon) and an Android
+  phone — directly on the same Wi-Fi, or across networks through an encrypted relay.
+  No accounts, no cloud storage. Apache-2.0, public repo `NODEPY/nodi`.
+- **Latest release:** `v1.0.0-alpha.9` (pre-release, 2026-11-24). Android `1.0.0-alpha.9` /
+  versionCode 9, macOS `1.0.0` / build 11. Alpha 9 = long-poll relay (instant Internet
+  transfers) + relay capacity work. Alpha 8 = full EN/RU translations. Alpha 7 = new design.
+- **Physically verified:** Internet scenarios 1–8 (rooms both ways, files/text both ways,
+  restart, cancel, wrong/expired code) on the owner's Mac (Wi-Fi) ↔ Galaxy S21 FE (mobile
+  data) with the rooms test builds of 2026-11-06/23 (version 1.0.0-alpha.5). Everything after Alpha 6 (design, translations,
+  long-poll) was verified by automated tests, an Android API 37 emulator and macOS window
+  snapshots, **not** on the physical phone yet.
+- **Current goal of the owner:** promote Nodi (Reddit, Hacker News, then AlternativeTo,
+  awesome-lists, Ukrainian communities). Post drafts are in Appendix A. Nothing has been
+  posted yet; the owner posts from their own accounts (or approves each post explicitly).
+
+## 2. Live services
+
+| What | Where | Notes |
+| --- | --- | --- |
+| Landing page | https://getnodi.pages.dev | Classic Cloudflare Pages project `getnodi`, files from `site/public`. Live copy matches `main`. |
+| Old landing URL | https://nodi.igor-shura2011faik.workers.dev | Worker `nodi` with assets only; 301-redirects every path to getnodi.pages.dev. Source is not in the repo (a one-line `_redirects`). |
+| Relay | https://nodi-relay.igor-shura2011faik.workers.dev | Worker `nodi-relay` + Durable Object `RelayHub` (one instance, name `private-alpha-v1`). Source `server/cloudflare`. Current version `39d9e621-…` (code from PR #13 + alpha.9 download secrets). |
+| Download links | `<relay>/download/android`, `<relay>/download/macos` | Counted 302 redirects to the release assets. `/download/test/*` are never counted. |
+| Releases | https://github.com/NODEPY/nodi/releases | Assets: APK, Mac ZIP, BUILD-MANIFEST.json, BUILD-REPORT.md, SHA256SUMS.txt. |
+| Repo homepage | set to https://getnodi.pages.dev | Description + 12 topics set via `gh repo edit`. Social preview image NOT set (manual, Settings → Social preview → `docs/images/hero.png`). |
+
+The relay hostname contains the Cloudflare account subdomain derived from the owner's email.
+It is baked into released apps (Go `internal/internet/client.go` const `Server`, Android
+`NodiInternet.SERVER`), README buttons and the landing page. Changing the account subdomain
+would break Internet transfers in every released build. Only a custom domain + a new app
+release can remove it.
+
+## 3. Repository map
+
+| Path | What |
+| --- | --- |
+| `internal/transfer` | Go core: pairing, TLS 1.3 pinning, file/text protocol, device book |
+| `internal/internet` | Go relay client: enrollment/rooms (`pairing.go`), WSS tunnel + receiver loop (`client.go`) |
+| `cmd/nodi` | Go CLI / JSON core used by the Mac app (`nodi-core` inside Nodi.app) |
+| `internal/relay`, `cmd/nodi-relay` | Old loopback relay prototype (historical, not deployed) |
+| `android/` | Android app (Kotlin, no Compose; UI built in code in `MainActivity.kt` ~1.7k lines). `NodiText.kt` = translations, `NodiInternet.kt` = relay client, `NodiReceiveService.kt` = foreground receiver |
+| `macos/` | macOS app (AppKit, single `Nodi.swift` ~1.5k lines + `NodiInternet.swift`, `NodiEndpoint.swift`). No Xcode project: built by `scripts/run-macos.sh` |
+| `server/cloudflare` | Relay Worker (`src/worker.js`), Miniflare tests (`test/`), `wrangler` is installed in its `node_modules` |
+| `site/public` | Landing page (one self-contained `index.html` with inline EN/UK/RU dictionary, `_headers`, `404.html`, `assets/`) |
+| `tests/interop` | Kotlin ↔ Go tests using the production Kotlin transport; 2 of them hit the live relay |
+| `scripts/` | `run-macos.sh` (build Mac app), `build-rooms.sh` (test+public variants), `install-macos.sh` (end-user installer), `check-translations.py`, `check-core.py`, `check-endpoint-macos.sh`, `internet-report.mjs` (owner's private stats) |
+| `docs/` | `INTERNET-ALPHA.md` (rooms user guide + physical test checklist), `INTERNET-RELAY.md`, `VPN-ADDRESS.md`, `CLI.md`, `images/` (README/landing images) |
+
+## 4. This Mac, toolchain and quirks
+
+- **The project folder name ends with a space:** `/Users/node/Projects/NODI ` — always quote paths.
+- Go 1.27.2; Node 26 (Homebrew, installed 2026-11-24); JDK 25 (Temurin); Android SDK at
+  `~/Library/Android/sdk` (build-tools 36.0.0), emulator AVD `Medium_Phone_API_37.0`.
+- **macOS SDK:** the default SDK 27 is incompatible with Swift 6.3.3 here. `run-macos.sh`
+  picks `/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk` automatically;
+  `check-endpoint-macos.sh` does NOT — run it as
+  `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk bash scripts/check-endpoint-macos.sh`.
+- The terminal has no Screen Recording / Accessibility permission. To see the Mac UI use
+  snapshot mode: `NODI_SNAPSHOT=/path/out.png <Nodi.app>/Contents/MacOS/Nodi -nodi.language en`
+  (empty temporary device store, no receiver, renders the window and quits).
+- Android emulator: boots with a "System UI isn't responding" dialog — tap **Wait**
+  (`adb shell input tap 163 1330` at 1080×2400). Clean status bar for screenshots:
+  `adb shell settings put global sysui_demo_allowed 1` + `am broadcast -a com.android.systemui.demo -e command enter|clock -e hhmm 0941|...`.
+- Image work (README/landing images) used Pillow in a throwaway venv:
+  `python3 -m venv /tmp/venv && /tmp/venv/bin/pip install pillow qrcode`.
+- `.claude/launch.json` (untracked, local only) serves `site/public` on port 8137 for the
+  desktop app's browser preview.
+- The owner's running dev Nodi may be launched from `build/Nodi.app`; rebuilding that path
+  replaces the app under it.
+
+## 5. Secrets and private files — never print, commit or upload
+
+| File | Contents |
+| --- | --- |
+| `server/cloudflare/.dev.vars.relay-admin` | `ADMIN_TOKEN=<64 hex>` for the relay admin API (also a Worker secret) |
+| `build/internet-activation/` | Old operator activation codes for the owner's Mac and S21 (pre-rooms) |
+| `build/private-report/` | Generated private stats report (0600/0700) |
+
+All three are git-ignored (`build/`, `.dev.vars*`). Worker secrets: `ADMIN_TOKEN`,
+`DOWNLOAD_ANDROID_URL`, `DOWNLOAD_MACOS_URL`. Wrangler is logged in with the owner's OAuth
+token (`~/Library/Preferences/.wrangler/config/default.toml`).
+
+- **Private report:** `node scripts/internet-report.mjs` → `build/private-report/index.html`
+  (daily pseudonymous usage, feedback, download counts). It also prints the **owner link**
+  (`<relay>/download/owner/<sha256("nodi-owner-link:"+ADMIN_TOKEN)>`): opening it sets an
+  HttpOnly cookie so that browser's downloads are not counted. The owner has the link;
+  do not post it anywhere.
+- Using the admin token for public interop tests: `export NODI_TEST_RELAY_ADMIN="$(cut -d= -f2 server/cloudflare/.dev.vars.relay-admin | tr -d '\n')"`
+  — the tests create temporary devices and delete them.
+
+## 6. Everyday checks (all were green on 2026-11-24)
+
+```bash
+go vet ./... && go test -race -count=1 ./...
+python3 scripts/check-core.py
+python3 scripts/check-translations.py
+(cd server/cloudflare && npm test && npm run check)          # Miniflare 27 tests + dry-run deploy
+bash android/gradlew -p android assembleDebug testDebugUnitTest
+bash android/gradlew -p tests/interop test --rerun-tasks --no-daemon   # 9 pass, 2 public skipped without NODI_TEST_RELAY_ADMIN
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk bash scripts/check-endpoint-macos.sh
+NODI_NO_OPEN=1 NODI_APP_DIR="$TMPDIR/Nodi.app" bash scripts/run-macos.sh   # Mac build without touching build/Nodi.app
+```
+
+Gradle may treat tests as up-to-date and print nothing — use `--rerun-tasks` to really run them.
+
+## 7. Working agreements with the owner
+
+- The owner writes in Ukrainian; answer in Ukrainian. Repo docs, commits, release notes and
+  the landing page default language are English.
+- Branch per change (`codex/<topic>`), PR into `main`, merge with `gh pr merge <n> --merge`
+  **only after CI is green** (the owner usually says «Перевір і змердж»). GitHub auto-merge is
+  disabled for the repo. Each push runs CI twice (push + pull_request); if the
+  pull_request run is fully green and only the duplicate push run is pending, merging is
+  acceptable — say so explicitly.
+- Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR
+  bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- Deploying the relay, publishing releases, changing Worker secrets and anything public
+  needs the owner's go-ahead in chat (the auto-mode classifier blocked the first Worker
+  deploy until the owner approved). Posting on social sites always needs explicit approval
+  of the exact text.
+- Don't hit the counted `/download/android|macos` links with a browser-like User-Agent when
+  testing (it counts). Plain `curl` is not counted; `/download/test/*` is never counted.
+  (On 2026-11-24 one such check added +1 Android and +1 macOS.)
+
+## 8. Release procedure (as done for Alpha 7–9)
+
+1. Branch `codex/alpha-N`. Bump `android/app/build.gradle.kts` (`versionCode`, `versionName
+   = "1.0.0-alpha.N"`) and `macos/Info.plist` `CFBundleVersion` (+1). Edit the plist with a
+   text replace, **not** PlistBuddy (it reorders the file). Update README «Versioning»,
+   CHANGELOG (turn «Unreleased» into the new section), HANDOFF.
+2. Commit, push, open PR. While CI runs, build the **public** packages from that commit:
+   ```bash
+   rm -rf build/public/Nodi.app
+   NODI_TEST_INSTALL=false NODI_NO_OPEN=1 NODI_APP_DIR="$PWD/build/public/Nodi.app" bash scripts/run-macos.sh
+   bash android/gradlew -p android assembleDebug testDebugUnitTest -PnodiTestInstall=false --rerun-tasks
+   r=build/releases/alpha.N; mkdir -p $r
+   cp android/app/build/outputs/apk/debug/app-debug.apk $r/Nodi-Android-alpha.N.apk
+   (cd build/public && zip -qryX ../../$r/Nodi-macOS-arm64-alpha.N.zip Nodi.app)   # zip, not ditto: ditto adds ._ files that break the signature after unzip
+   ```
+3. Verify: `BuildConfig.NODI_TEST_INSTALL = false` (in `android/app/build/generated/source/buildConfig/debug/...`),
+   apksigner cert SHA-256 `c14152d8…b7` (debug key — same for all releases so updates install
+   over old ones), `aapt2 dump badging` version, ZIP extracted with both `unzip` and
+   `ditto -x -k` passes `codesign --verify --deep --strict`, `NodiTestInstall=false`, no
+   `/._`, `.dev.vars`, `activation` or `private-report` entries, the public app launches
+   (`NODI_SNAPSHOT=…`).
+4. After CI is green: merge; check the merge commit's tree equals the built commit's tree
+   (`git rev-parse <merge>^{tree}` vs `<built>^{tree}`); write `BUILD-MANIFEST.json`,
+   `BUILD-REPORT.md`, `SHA256SUMS.txt` (see `build/releases/alpha.9/` for the format).
+5. `gh release create v1.0.0-alpha.N --target <merge sha> --prerelease --title "Nodi — Alpha N · <theme>" --notes-file … <5 files>`.
+   Notes: hero image via raw.githubusercontent.com at the merge sha, quick download links,
+   «Installing on macOS» (installer command + macOS 15 Open Anyway path), what's new,
+   limitations. Compare uploaded asset digests with SHA256SUMS.txt.
+6. Point the download counter at the new assets (from `server/cloudflare`):
+   ```bash
+   printf '%s' 'https://github.com/NODEPY/nodi/releases/download/v1.0.0-alpha.N/Nodi-Android-alpha.N.apk' | npx wrangler secret put DOWNLOAD_ANDROID_URL
+   printf '%s' 'https://github.com/NODEPY/nodi/releases/download/v1.0.0-alpha.N/Nodi-macOS-arm64-alpha.N.zip' | npx wrangler secret put DOWNLOAD_MACOS_URL
+   ```
+   It takes ~30 s to propagate; then `curl -s -o /dev/null -w '%{redirect_url}' <relay>/download/android`.
+7. Check the Mac installer picks the new release:
+   `curl -fsSL https://raw.githubusercontent.com/NODEPY/nodi/main/scripts/install-macos.sh | NODI_INSTALL_TEST=1 NODI_NO_OPEN=1 NODI_INSTALL_DIR=$TMPDIR/x bash`.
+
+## 9. Relay: rules that must not be broken
+
+- **Free plan budget:** 100,000 Worker requests/day and 100,000 Durable Object rows
+  written/day (each `put`, `delete` and `setAlarm` is a written row). Before Alpha 9 every
+  poll wrote 2+ rows and every relayed frame wrote one — keep it that way:
+  - rate windows, presence and the alarm time live in `this.mem`, not in storage;
+  - per-frame counters/flow-control flags live in WebSocket attachments
+    (`serializeAttachment`), not in the session record;
+  - `save()` skips empty transactions; the alarm is set only when its time changes.
+- **Long-poll:** `/v1/incoming` with `X-Nodi-Wait: 1` holds ≤50 s (`LONG_POLL_MS`, env
+  override `LONG_POLL_MS` for tests) and is woken in `run()` **after** `save()`
+  (`this.mem.wake`) — waking before the save made the receiver see an empty list.
+  Without the header the relay answers immediately: **Alpha 6–8 clients rely on this.**
+- Clients: first poll immediate (status shows at once); quick empty answer or error → 10 s
+  pause; answer with only in-progress sessions → 1 s pause (otherwise the Go loop re-polls
+  at full speed into the 120 req/min rate limit); re-read the allowlist when sessions
+  arrive (room-paired peers).
+- Capacity: `MAX_DEVICES` 1000, `MAX_SESSIONS` 32 (≤2 per device), 32 pending rooms
+  (≤2 per host), presence 75 s, session rendezvous `WAIT_MS` 30 s, life 10 min, 64 MiB and
+  4096 frames per session, 64 KiB frames, Internet files 16 MiB (client side). Roughly 50
+  devices can keep receiving on all day within the free plan.
+- **Before deploying relay changes:** Miniflare tests, then deploy, then the 2 public
+  interop tests with the new clients AND with the old clients — the old-client check:
+  ```bash
+  git worktree add "$TMPDIR/nodi-main" <previous release tag>
+  cd "$TMPDIR/nodi-main" && NODI_TEST_RELAY_ADMIN=… bash "/Users/node/Projects/NODI /android/gradlew" -p tests/interop test --rerun-tasks --no-daemon
+  ```
+- Deploy: `cd server/cloudflare && npx wrangler deploy` (needs owner approval).
+- `server/cloudflare/src/worker.js` line 3 comment still says credentials are operator
+  provisioned; devices actually self-enroll (cosmetic).
+
+## 10. Landing page
+
+- Deploy: `cd server/cloudflare && npx wrangler pages deploy ../../site/public --project-name getnodi --branch main`
+  (no `--force`; the project already exists on classic Pages. Wrangler 4.157 otherwise
+  creates Workers-with-assets projects.)
+- Static only (no Functions) → requests are free and do not count toward the relay's quota.
+  CSP/security headers in `_headers`; images are WebP made from `docs/images/*.png`;
+  `assets/og.jpg` 1200×630 for link previews; `assets/qr-android.svg` → Android download.
+- English is the default; UK/RU only after the visitor picks them (localStorage
+  `nodi.lang`). Texts: the `T` dictionary near the bottom of `index.html`; English is read
+  from the HTML itself.
+- Device-aware hero: Mac → macOS button first + installer command; Android → APK first;
+  other desktops → QR; iPhone/iPad → "not available yet".
+
+## 11. Translations
+
+- Source strings are Ukrainian. Android: `NodiText.kt` (`"uk" to arrayOf("en","ru")`; labels,
+  buttons and `NodiDialog` translate automatically, other places call `tr()`/`NodiText.text`).
+  macOS: `nodiWords` in `Nodi.swift` (`"uk": ["en","ru"]`, `NodiL()`; `NodiLabel`/`NodiButton`
+  translate automatically; NSAlert texts must be wrapped). Go core event messages are
+  shown by the Mac app, so they also need entries in `nodiWords`.
+- Keys ending in `:` or a space work as prefixes ("Код кімнати:" + value).
+- **A duplicate key in `nodiWords` crashes the Mac app at launch** (Swift dictionary
+  literal). `scripts/check-translations.py` (CI) catches untranslated literals, duplicates,
+  Cyrillic in English and Ukrainian letters in Russian.
+- Translate parts before concatenating — a combined string is not in the table.
+
+## 12. Known gaps and ideas (roughly by priority)
+
+1. **Promotion** (owner's current goal) — Appendix A; then AlternativeTo, PRs to awesome
+   lists, DOU/Telegram (Ukrainian), Product Hunt only after notarization.
+2. Install Alpha 9 on the physical S21 FE + Mac and re-run a quick Internet transfer
+   (long-poll was only tested via interop and emulator).
+3. Mac notarization needs the Apple Developer Program ($99/yr, owner pays). Plan: Developer
+   ID Application cert + `notarytool store-credentials nodi-notary` (owner enters the
+   app-specific password) → script: sign `nodi-core` then the app with hardened runtime +
+   timestamp, notarize, staple, zip, `spctl` check. No identities exist on this Mac yet.
+4. Android release signing: APKs use the debug key `c14152d8…`. Switching to a real key
+   breaks in-place updates for existing users — decide before the user base grows (and
+   before Play Store / F-Droid).
+5. Custom domain (owner buys) → move landing and, with a new app release, the relay off the
+   email-derived workers.dev subdomain.
+6. Statistics scenarios 9–10 in `docs/INTERNET-ALPHA.md` (test vs public build counting) are
+   automated-only; the owner said they are not needed now.
+7. Monoliths `MainActivity.kt` and `Nodi.swift` — split when touching big UI features.
+8. Roadmap from README: Windows/Linux, NAT traversal, offline delivery, folders, resume.
+
+---
+
+## Appendix A — launch post drafts (prepared 2026-11-24, not posted)
+
+Post on weekdays 15:00–18:00 Kyiv time, one channel per day (e.g. HN Monday, r/macapps
+Tuesday, r/androidapps Wednesday, r/opensource Thursday). Answer every comment in the first
+2 hours; never ask for upvotes. Attach `docs/images/hero.png` / `android.png` / `macos.png`.
+
+**Hacker News** — Title: `Show HN: Nodi – Encrypted file and text transfer between Mac and Android`,
+URL `https://getnodi.pages.dev`, first comment by the owner:
+
+> Hi HN, I built Nodi because moving files between my Galaxy and my MacBook was always a detour through a cloud drive or a messenger.
+>
+> How it works:
+> - Same Wi-Fi: mDNS discovery, then you compare a short code on both screens. After that devices talk directly over TLS 1.3 pinned to each other's certificate.
+> - Different networks: one device creates a "room" with a 16-character code, the other joins, the host approves. From then on Nodi tries a direct TCP connection and falls back to a relay (a Cloudflare Worker + Durable Object) that only forwards the pinned TLS stream – it never sees file contents. The room code never reaches the server in clear: it gets a digest and an AES-256-GCM blob.
+> - Receivers long-poll the relay, so Internet transfers start immediately.
+>
+> Stack: Go core (also a CLI), native Kotlin app on Android, AppKit on macOS. Apache-2.0, no accounts, no analytics unless you opt in.
+>
+> It's an alpha and I'd rather be upfront about the rough edges: Internet transfers are capped at 16 MiB, the Mac build is Apple Silicon only and not notarized yet (there's a one-line installer that verifies the SHA-256), and the APK is debug-signed. No independent security audit yet.
+>
+> I'd love feedback on the pairing flow and the relay design.
+>
+> Code: https://github.com/NODEPY/nodi
+
+**r/macapps** — Title: `I made Nodi – AirDrop-style file & text transfer between your Mac and an Android phone (free, open source)`.
+Body: developer intro; bullets (Wi-Fi find + code + drag & drop; rooms across networks;
+text/links to clipboard; pinned TLS, no account/cloud/tracking); the installer command;
+macOS 15 Open Anyway note for the ZIP; website + source links; "alpha, Feedback button in the app".
+
+**r/androidapps** — Title: `[DEV] Nodi – send files, text and links between Android and Mac, on Wi-Fi or over the Internet (free, open source, no account)`.
+Body: why it was built; bullets (Find on Wi-Fi → code → send, up to 2 GiB on LAN; rooms
+across networks with automatic Wi-Fi/Internet switching; Share → Nodi and Text tab;
+encrypted, no account/ads/tracking, Apache-2.0); APK link via the website; honest notes
+(GitHub APK not Play Store, 16 MiB over the Internet, desktop side = Apple Silicon Mac).
+Check the subreddit's self-promotion rules/days first.
+
+**r/opensource** — Title: `Nodi: open-source (Apache-2.0) encrypted file transfer between Mac and Android – Go core, Kotlin and AppKit apps, Cloudflare relay`.
+Body: architecture bullets (Go core/CLI, Kotlin, AppKit; mDNS + comparison codes + pinned
+TLS + SHA-256; rooms + Worker relay forwarding the pinned stream, long-poll; CI covering
+Go, Kotlin↔Go interop, Miniflare relay tests and translation completeness); links; ask for
+security review and Windows/Linux contributions.
+
+**Prepared answers:** vs LocalSend/KDE Connect (works across networks via encrypted rooms
+without VPN or port forwarding; relay can't read data; KDE Connect is broader device
+integration); why not Play Store / notarized (early alpha, planned); does the server see
+files (no — device-to-device TLS; it sees device IDs, IPs, timing, size); Windows/iPhone
+(not yet; Windows/Linux on the roadmap, help welcome).
+
+---
+
+# History (older checkpoints, newest first)
+
+## Relay capacity and Alpha 9 (2026-11-24)
 
 - Long-poll: clients send `X-Nodi-Wait: 1` to /v1/incoming; the relay holds up to 50 s and
   wakes the receiver after the new session is saved. First poll after start or an error is
@@ -13,7 +314,7 @@
 
 ---
 
-# Landing page (2026-11-24)
+## Landing page (2026-11-24)
 
 - Live at https://getnodi.pages.dev — a classic Cloudflare Pages project `getnodi` (no account subdomain
   in the URL). `site/public` is the whole site: static files only, no Functions, so
@@ -30,7 +331,7 @@
 
 ---
 
-# Alpha 8 release (2026-11-24)
+## Alpha 8 release (2026-11-24)
 
 - `v1.0.0-alpha.8`: full English/Russian translations (PR #8), Android 1.0.0-alpha.8 / 8,
   macOS build 10, public variant. Assets and report in `build/releases/alpha.8/`.
@@ -41,7 +342,7 @@
 
 ---
 
-# Alpha 7 release (2026-11-24)
+## Alpha 7 release (2026-11-24)
 
 - `v1.0.0-alpha.7` pre-release on main `fb304fa` (PR #5 design, PR #6 bump): Android
   1.0.0-alpha.7 / 7, macOS build 9, public variant. Assets and report in
@@ -56,7 +357,7 @@
 
 ---
 
-# Alpha 6 release and download counter (2026-11-23)
+## Alpha 6 release and download counter (2026-11-23)
 
 - Released `v1.0.0-alpha.6` (pre-release, tag on main `158aade`, PR #3; PR #2 merged
   with it). Public builds: Android 1.0.0-alpha.6 / 6, macOS build 8. Assets,
@@ -74,12 +375,12 @@
 
 ---
 
-# Physical acceptance checkpoint (2026-11-23)
+## Physical acceptance checkpoint (2026-11-23)
 
 Branch `codex/internet-relay`, on top of `2337974`. No merge, release, tag,
 version bump, deploy or Worker change.
 
-## Physical-device result
+### Physical-device result
 
 - Scenarios 1–8 in `docs/INTERNET-ALPHA.md` PASSED, reported by the owner:
   Mac on Wi-Fi ↔ S21 FE on mobile data (Wi-Fi off, no VPN/manual address).
@@ -89,7 +390,7 @@ version bump, deploy or Worker change.
   `node scripts/internet-report.mjs`, and Node is not installed (the former
   `/private/tmp/node-v22.23.4-…` copy is gone). Miniflare tests also need Node.
 
-## Builds used
+### Builds used
 
 `bash scripts/build-rooms.sh` on 2026-11-23 (no SDKROOT; script picked
 MacOSX26.sdk). Android APKs are byte-identical to 2026-11-06
@@ -98,7 +399,7 @@ MacOSX26.sdk). Android APKs are byte-identical to 2026-11-06
 (`NodiTestInstall=true`), public `3bf77afc…a19` (`false`); codesign strict PASS;
 no secret paths in archives.
 
-## Same-day checks and cleanups
+### Same-day checks and cleanups
 
 - `go vet`, `go test -race -count=1 ./...`: PASS. Android
   `assembleDebug testDebugUnitTest`: PASS. Interop forced rerun: 9 PASS,
@@ -109,7 +410,7 @@ no secret paths in archives.
 - README, `docs/INTERNET-RELAY.md`, server README enrollment section updated
   to reflect the deployed relay, rooms and self-enrollment.
 
-## Remaining
+### Remaining
 
 - Scenarios 9–10 after installing Node ≥22.
 - Optional `/v1/rooms/join` quota (see proposal below) requires a Worker deploy.
@@ -117,7 +418,7 @@ no secret paths in archives.
 
 ---
 
-# Review checkpoint — ready for physical acceptance (2026-11-06)
+## Review checkpoint — ready for physical acceptance (2026-11-06)
 
 Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
 - `180de45`: only `scripts/build-rooms.sh` and `docs/INTERNET-ALPHA.md`;
@@ -128,7 +429,7 @@ Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
 - This checkpoint adds review evidence here and documents Node/PATH and local
   socket requirements in the Cloudflare README. Older checkpoints remain below.
 
-## Fresh local verification
+### Fresh local verification
 
 - `go vet ./...` and `go test -race -count=1 ./...`: PASS.
 - `npm test`: 26/26 PASS; `npm run check`: PASS (dry-run only).
@@ -142,7 +443,7 @@ Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
 - No public interoperability test was rerun locally and no owner device was
   registered, rotated, installed or cleared. Prior 11/11 evidence remains historical.
 
-## Existing artifacts rechecked (not rebuilt or replaced)
+### Existing artifacts rechecked (not rebuilt or replaced)
 
 | File in build/ | SHA-256 |
 | --- | --- |
@@ -166,7 +467,7 @@ Branch `codex/internet-relay`; reviewed local commits above `d8fd3de`:
   was identified. This pattern scan does not prove absence of arbitrary encoded
   secrets; private activation/environment files were not read for comparison.
 
-## Manual acceptance and optional hardening
+### Manual acceptance and optional hardening
 
 All scenarios 1–10 in `docs/INTERNET-ALPHA.md` remain **NOT RUN**. A person must
 run them on the physical Mac on Wi-Fi and S21 FE on mobile data. Automated
@@ -188,12 +489,12 @@ No merge, release, tag, force push, paid-plan change or main modification.
 
 ---
 
-# Current checkpoint — rooms deployed and verified (2026-11-06)
+## Current checkpoint — rooms deployed and verified (2026-11-06)
 
 Base `ceb5c1c`; branch `codex/internet-relay`. No merge, release, tag, version
 bump, paid-plan change or force push. `main` was not modified.
 
-## Implemented
+### Implemented
 
 - EC certificate proof-of-possession self-enrollment with one-minute, one-use
   challenges. Revoked identities cannot re-enroll; explicit admin restore remains.
@@ -212,7 +513,7 @@ bump, paid-plan change or force push. `main` was not modified.
 - Test/public build separation is explicit in `scripts/build-rooms.sh`; the
   Android property and macOS Info.plist field are set per variant.
 
-## Deployed and verified
+### Deployed and verified
 
 - Worker: https://nodi-relay.igor-shura2011faik.workers.dev
 - Active version `9f3d2050-d8f4-4dc8-b20b-a1a984c379de`, created
@@ -242,7 +543,7 @@ bump, paid-plan change or force push. `main` was not modified.
 - Owner devices are marked test on the server; private report exists locally.
   Do not print or commit activation files or tokens.
 
-## Remaining
+### Remaining
 
 - Physical Mac (Wi-Fi) ↔ S21 FE (mobile data) manual run: room creation in both
   directions, file/text both ways, restart persistence, cancellation, wrong and
@@ -254,7 +555,7 @@ bump, paid-plan change or force push. `main` was not modified.
 - Historical checkpoints below are preserved as history; statements about missing
   rooms/client integration are superseded by this checkpoint.
 
-## Commits in this checkpoint
+### Commits in this checkpoint
 
 - `0f4edf5` server rooms, self-enrollment, insights and tests
 - `012244d` Go room enrollment and relay lifecycle
@@ -267,13 +568,13 @@ bump, paid-plan change or force push. `main` was not modified.
 
 ---
 
-# Latest checkpoint — Android/macOS Internet integration
+## Latest checkpoint — Android/macOS Internet integration
 
 Updated: 2026-11-04. Branch `codex/internet-relay`; base `ceb5c1c`.
 User requested completing integration autonomously. No merge, release, tag,
 version bump, paid-plan change or force push.
 
-## Implemented
+### Implemented
 
 - Go and production Kotlin WebSocket clients connect through the deployed
   Cloudflare relay. Direct TCP is tried first (4-second timeout); only TCP
@@ -291,7 +592,7 @@ version bump, paid-plan change or force push.
   that releases outgoing TLS writes. Regression test exercises incoming data
   arriving before ACK while the application writes before reading.
 
-## Validation
+### Validation
 
 - `go vet ./...` and `go test -race ./...`: PASS.
 - `go test -race -count=5 ./internal/internet`: PASS (both stream tests).
@@ -308,7 +609,7 @@ version bump, paid-plan change or force push.
 - Physical Android/macOS UI, KeyStore/Keychain activation and mobile-data↔Wi-Fi
   behavior are NOT yet verified. These require installing the new builds.
 
-## User artifacts and activation (local only)
+### User artifacts and activation (local only)
 
 - `build/nodi-android-internet.apk`: 17,057,492 bytes, 2026-11-04 20:04:23 EET.
   SHA-256: `91f5d0a83ef9589ce8b8d3768c66b79eb41d2fd9075bdfc348d6cedd7015cc98`.
@@ -331,7 +632,7 @@ client integration/provisioning is absent are superseded by this checkpoint.
 
 ---
 
-# Latest checkpoint — Cloudflare deployed and remotely verified
+## Latest checkpoint — Cloudflare deployed and remotely verified
 
 Updated: 2026-11-03. Branch `codex/internet-relay`. Deployed source commit
 `c75730f` (the later documentation commit does not change Worker code).
@@ -374,7 +675,7 @@ further validation before broad rollout.
 
 ---
 
-# Latest checkpoint — relay availability and boundary fixes
+## Latest checkpoint — relay availability and boundary fixes
 
 Updated: 2026-11-03. Branch `codex/internet-relay`; base for this change
 `1c083a4`. User asked to continue; current milestone remains server-side.
@@ -406,13 +707,13 @@ admin quota and byte-accounting notes are superseded by the fixes above.
 
 ---
 
-# Current checkpoint — Internet relay (private alpha server)
+## Current checkpoint — Internet relay (private alpha server)
 
 Updated: 2026-11-03. Branch `codex/internet-relay`, based on PR #2 HEAD
 `26c67eb`. PR #2 is still unmerged and `main` was not modified. No deployment,
 app integration, PR, merge, tag or release was made.
 
-## Implemented
+### Implemented
 
 - `internal/relay` + `cmd/nodi-relay`: loopback-only Go rendezvous prototype
   with its own open TCP protocol; unchanged in this checkpoint except review.
@@ -426,7 +727,7 @@ app integration, PR, merge, tag or release was made.
 - `.github/workflows/relay.yml`: Node 22, npm cache on
   `server/cloudflare/package-lock.json`, `npm ci`, `npm test`, `npm run check`.
 
-## Verified locally (actual command results)
+### Verified locally (actual command results)
 
 - `npm ci` in `server/cloudflare`: added 42 packages, 0 vulnerabilities.
 - `npm test`: 15 tests, 15 pass. Three consecutive final runs after all edits:
@@ -453,7 +754,7 @@ app integration, PR, merge, tag or release was made.
   session/frame/byte ceilings are code-confirmed; most are not exercised at
   their exact boundary by tests.
 
-## Fixes in this checkpoint
+### Fixes in this checkpoint
 
 - The reported failure of “inner TLS rejects an incorrect certificate pin”
   did not reproduce in 10 targeted runs. The test bridge could still call
@@ -475,7 +776,7 @@ app integration, PR, merge, tag or release was made.
   This supersedes the old “next: authenticated presence/ticket issuance” note
   for the Cloudflare server; the Go prototype still lacks them.
 
-## Security review notes
+### Security review notes
 
 - Tickets are distinct per role/session, checked against the authenticated
   device, consumed before the 101 response and persisted before it is visible.
@@ -492,7 +793,7 @@ app integration, PR, merge, tag or release was made.
   limit and depend on edge controls. The 64 MiB check runs after adding a frame,
   so teardown can occur up to one frame past the advertised cap.
 
-## Not verified
+### Not verified
 
 - No Cloudflare deployment, account configuration, secret, real HTTPS/WSS or
   domain; no paid hosting was purchased.
@@ -509,7 +810,7 @@ pushed” statements predate PR #2, which another agent published successfully.
 
 ---
 
-# Nodi handoff — manual address / VPN
+## Nodi handoff — manual address / VPN
 
 Updated: 2026-11-03. Base main: 5293cf3 (Alpha 5).
 Working branch: codex/manual-vpn-address. Final checkpoint: `git log -1` on this branch.
@@ -517,7 +818,7 @@ User requested manual address/VPN support and progress reports. Implementation a
 local verification complete; no push, PR or new release made for this feature.
 Published Alpha 5 and its tag must remain unchanged.
 
-## Implemented
+### Implemented
 
 - Android and Mac: Address / VPN dialog for already-paired devices; save numeric
   IPv4:port override and reset with Automatic. Display this receiver's endpoints.
@@ -531,7 +832,7 @@ Published Alpha 5 and its tag must remain unchanged.
 - Added @main NodiApplication because the Mac app now has two Swift source files.
 - New guide docs/VPN-ADDRESS.md; README and Unreleased changelog updated.
 
-## Verification — all final local checks passed
+### Verification — all final local checks passed
 
 - `bash android/gradlew -p android assembleDebug testDebugUnitTest`: PASS.
   Android unit tests remain template tests, not physical share/VPN UI validation.
@@ -547,14 +848,14 @@ Published Alpha 5 and its tag must remain unchanged.
 - Earlier Mac build failures (multi-file entry point / edited source during compile)
   were resolved; final source was built without concurrent edits.
 
-## Local outputs
+### Local outputs
 
 - Android: android/app/build/outputs/apk/debug/app-debug.apk
 - Mac: build/Nodi.app
 - These are development builds after Alpha 5, with unchanged Alpha 5 version fields.
   Do not upload as Alpha 5 replacement artifacts. Bump versions for a future release.
 
-## Next steps / manual acceptance
+### Next steps / manual acceptance
 
 1. Pair Android/Mac using existing flow, connect VPN on both, restart receivers.
 2. Put devices on different Wi-Fi networks; set each peer's VPN IPv4:current-port.
@@ -565,7 +866,7 @@ Published Alpha 5 and its tag must remain unchanged.
 6. If publication requested, push branch, run CI, open PR; choose future alpha
    version/build numbers and rebuild artifacts from its final commit.
 
-## Boundaries
+### Boundaries
 
 No relay, no NAT traversal, no guaranteed Internet connectivity without an existing
 VPN/routable TCP. VPN provider infrastructure may still be involved. IPv4 only.
@@ -573,7 +874,7 @@ Dynamic receiver ports can change on restart. Address display is refreshed when
 receiver starts; connect VPN first. This task did not install/configure a VPN.
 Physical dual-network testing not done. Strix remains incomplete from earlier work.
 
-## Inherited issue found (not changed)
+### Inherited issue found (not changed)
 
 Root .gitignore has unanchored `nodi`, hiding new files inside dev/nodi packages as
 well as the root binary. New NodiEndpoint.kt and EndpointTest.kt are explicitly
@@ -581,7 +882,7 @@ staged with `git add -f`; check they are in the checkpoint commit. Prefer changi
 this rule to `/nodi` after user confirmation. Prior instruction requires confirming
 corrections to the other agent's work; no change to that rule was made here.
 
-## Key files
+### Key files
 
 - android/.../MainActivity.kt: manualEndpoint, editEndpoint, renderNearby,
   fillSelectedDevice. Preferences: nodi_endpoints, fingerprint key.
