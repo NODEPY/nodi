@@ -131,6 +131,8 @@ details p { margin: 12px 0 0; color: var(--muted); }
 
 .final { text-align: center; background: linear-gradient(135deg, rgba(139,124,255,.18), rgba(76,201,240,.1)); border: 1px solid rgba(139,124,255,.35); border-radius: 28px; padding: 56px 24px; }
 .final .sub { margin: 0 auto 30px; }
+.support { text-align: center; }
+.support .sub { margin: 0 auto 26px; }
 
 footer { border-top: 1px solid var(--stroke); padding: 32px 0 48px; color: var(--muted); font-size: 14px; }
 footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; align-items: center; }
@@ -291,6 +293,17 @@ footer nav { margin: 0; gap: 18px; flex-wrap: wrap; }
     </div>
   </section>
 
+  <section id="support">
+    <div class="wrap support">
+      <div class="kicker" data-i18n="sup.kicker">Support</div>
+      <h2 data-i18n="sup.title">Like Nodi? Support the author.</h2>
+      <p class="sub" data-i18n="sup.sub">Nodi has no ads, no trackers and no paid tier. A small tip helps pay for the relay and for the Apple notarization, and keeps the app free for everyone.</p>
+      <div class="cta">
+        <a class="btn btn-ghost" href="https://ko-fi.com/KOFI_NAME" rel="noopener"><span data-i18n="sup.button">Buy me a coffee on Ko-fi</span></a>
+      </div>
+    </div>
+  </section>
+
   <section>
     <div class="wrap">
       <div class="final">
@@ -313,6 +326,7 @@ footer nav { margin: 0; gap: 18px; flex-wrap: wrap; }
       <a href="https://github.com/NODEPY/nodi/releases" data-i18n="foot.releases">Releases</a>
       <a href="https://github.com/NODEPY/nodi/blob/main/CHANGELOG.md" data-i18n="foot.changelog">What's new</a>
       <a href="https://github.com/NODEPY/nodi/blob/main/SECURITY.md" data-i18n="foot.security">Security</a>
+      <a href="#support" data-i18n="foot.support">Support</a>
     </nav>
   </div>
 </footer>
@@ -362,6 +376,7 @@ footer nav { margin: 0; gap: 18px; flex-wrap: wrap; }
       "q3": "Чому Mac попереджає про Nodi?", "a3": "Mac-версія ще не нотаризована Apple. Інсталятор однією командою обходить попередження; із ZIP дозвольте запуск один раз у Системні параметри → Приватність і безпека.",
       "q4": "Є версія для iPhone чи Windows?", "a4": "Поки ні. Nodi працює між Mac з Apple Silicon і телефоном на Android. Windows і Linux — у планах.",
       "q5": "Є обмеження?", "a5": "Це альфа. Через інтернет — файли до 16 MiB, і приймання має бути ввімкнене; у Wi-Fi — до 2 GiB. Папки й докачування поки не підтримуються.",
+      "sup.kicker": "Підтримка", "sup.title": "Подобається Nodi? Підтримайте автора.", "sup.sub": "У Nodi немає реклами, трекерів і платної версії. Невеликий донат допомагає платити за relay та нотаризацію Apple і залишати застосунок безплатним для всіх.", "sup.button": "Підтримати на Ko-fi", "foot.support": "Підтримати",
       "final.title": "Спробуйте Nodi вже сьогодні.", "final.sub": "Безплатно, відкрито й приватно. Два завантаження — і готово.",
       "foot.releases": "Релізи", "foot.changelog": "Що нового", "foot.security": "Безпека"
     },
@@ -407,6 +422,7 @@ footer nav { margin: 0; gap: 18px; flex-wrap: wrap; }
       "q3": "Почему Mac предупреждает о Nodi?", "a3": "Mac-версия ещё не нотаризована Apple. Установщик одной командой обходит предупреждение; с ZIP разрешите запуск один раз в Системные настройки → Конфиденциальность и безопасность.",
       "q4": "Есть версия для iPhone или Windows?", "a4": "Пока нет. Nodi работает между Mac с Apple Silicon и телефоном на Android. Windows и Linux — в планах.",
       "q5": "Есть ограничения?", "a5": "Это альфа. Через интернет — файлы до 16 MiB, и приём должен быть включён; в Wi-Fi — до 2 GiB. Папки и докачка пока не поддерживаются.",
+      "sup.kicker": "Поддержка", "sup.title": "Нравится Nodi? Поддержите автора.", "sup.sub": "В Nodi нет рекламы, трекеров и платной версии. Небольшой донат помогает платить за relay и нотаризацию Apple и оставлять приложение бесплатным для всех.", "sup.button": "Поддержать на Ko-fi", "foot.support": "Поддержать",
       "final.title": "Попробуйте Nodi уже сегодня.", "final.sub": "Бесплатно, открыто и приватно. Две загрузки — и готово.",
       "foot.releases": "Релизы", "foot.changelog": "Что нового", "foot.security": "Безопасность"
     }
