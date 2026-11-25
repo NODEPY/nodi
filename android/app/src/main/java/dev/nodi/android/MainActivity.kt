@@ -103,6 +103,13 @@ class MainActivity : Activity() {
     private var nearbyTitles: List<String> = emptyList()
     private lateinit var nearbyPicker: Spinner
     private lateinit var nearbyRefresh: Button
+    private lateinit var wifiMode: Button
+    private lateinit var internetMode: Button
+    private lateinit var roomButton: Button
+    private lateinit var endpointButton: Button
+    private lateinit var routeHint: TextView
+    /** Wi-Fi (direct only) or Internet (relay only) — chosen by the toggle, never switched automatically. */
+    private var routeInternet = false
     private lateinit var nearbyHint: TextView
                 private var qrDialog: android.app.AlertDialog? = null
     private var lastPairID: String? = null
@@ -376,10 +383,18 @@ class MainActivity : Activity() {
             requestConnection()
         }
         icon(nearbyRefresh, "wifi", Color.WHITE)
-        val entry = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        entry.addView(nearbyRefresh, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(10) })
-        entry.addView(tonalButton("Інтернет", "globe") { internetSettings() }, LinearLayout.LayoutParams(0, dp(52), 1f))
-        connectionColumn.addItem(entry, 18)
+        roomButton = button("Кімната", true) { internetSettings() }
+        icon(roomButton, "globe", Color.WHITE)
+        routeInternet = getSharedPreferences("nodi_ui", MODE_PRIVATE).getString("route", "wifi") == "internet"
+        val routeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = cardBackground(); setPadding(dp(4),dp(4),dp(4),dp(4)) }
+        wifiMode = button("Wi-Fi") { setRoute(false) }
+        internetMode = button("Інтернет") { setRoute(true) }
+        for (mode in listOf(wifiMode, internetMode)) routeSwitch.addView(mode, LinearLayout.LayoutParams(0, dp(44), 1f))
+        connectionColumn.addItem(routeSwitch, 18)
+        routeHint = label("", 12f, MUTED).apply { gravity = Gravity.CENTER }
+        connectionColumn.addItem(routeHint, 8)
+        connectionColumn.addItem(nearbyRefresh, 12, dp(52))
+        connectionColumn.addItem(roomButton, 12, dp(52))
         val deviceCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = cardBackground()
             setPadding(dp(16), dp(16), dp(16), dp(16))
@@ -406,9 +421,11 @@ class MainActivity : Activity() {
         deviceCard.addView(deviceHeader,0)
         deviceCard.addItem(divider(), 12, 1)
         deviceCard.addItem(scanButton,8,dp(48))
-        deviceCard.addItem(rowButton("Адреса / VPN", "shield") { editEndpoint() },2,dp(48))
+        endpointButton = rowButton("Адреса / VPN", "shield") { editEndpoint() }
+        deviceCard.addItem(endpointButton,2,dp(48))
         deviceCard.addItem(rowButton("Відгук / приватність", "chat") { feedbackSettings() },2,dp(48))
         connectionColumn.addItem(deviceCard, 16)
+        renderRoute()
         val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = cardBackground(); setPadding(dp(4),dp(4),dp(4),dp(4)) }
         connectTab = button("Підключення") { showTab(0) }
         receiveTab = button("Отримання") { showTab(1) }
@@ -600,7 +617,7 @@ class MainActivity : Activity() {
             textStatus.text = friendlyError(error)
             return
         }
-        val session = NodiTransfer(NodiInternetStore.client(this))
+        val session = newTransfer()
         texting = true; transfer = session; batchCancelled = false
         textStatus.text = "Надсилаю текст…"
         renderBusy()
@@ -767,6 +784,7 @@ class MainActivity : Activity() {
         }
         forgetButton.isEnabled = !pairing && !selecting && !scanning && nearby.isNotEmpty()
         nearbyRefresh.isEnabled = !disabled
+        if (::roomButton.isInitialized) { roomButton.isEnabled = !disabled; wifiMode.isEnabled = !disabled; internetMode.isEnabled = !disabled }
         nearbyPicker.isEnabled = !disabled
         cancelButton.visibility = if (busy || pairing || selecting || selected.isNotEmpty()) View.VISIBLE else View.GONE
         cancelButton.isEnabled = busy || pairing || selecting || selected.isNotEmpty()
@@ -986,7 +1004,7 @@ class MainActivity : Activity() {
             try {
                 for((index,file) in files.withIndex()) {
                     if(batchCancelled)throw CancellationException()
-                    val session=NodiTransfer(NodiInternetStore.client(this));transfer=session
+                    val session=newTransfer();transfer=session
                     if(batchCancelled){session.cancel();throw CancellationException()}
                     session.send(invite,file.name,file.size,cacheDir,
                         openSource={contentResolver.openInputStream(file.uri) ?: throw IOException("Не вдалося прочитати вибраний файл.")},
@@ -1028,7 +1046,7 @@ class MainActivity : Activity() {
             message.contains("destination already exists") -> "На Mac уже є файл із таким ім’ям. Перейменуй файл або вибери інший."
             message.contains("connection code rejected") -> "Mac відхилив код. Скопіюй актуальний код із вікна Nodi."
             message.contains("ECONNREFUSED") || message.contains("Connection refused") -> "Mac не приймає з’єднання. Увімкни приймання й скопіюй новий код."
-            message.contains("ENETUNREACH") || message.contains("timed out", true) || message.contains("EHOSTUNREACH") -> "Mac недоступний. Перевір спільний Wi-Fi, мережеву адресу й дозвіл фаєрвола для Nodi."
+            message.contains("ENETUNREACH") || message.contains("timed out", true) || message.contains("EHOSTUNREACH") -> if (routeInternet) "Mac недоступний. Перевір спільний Wi-Fi, мережеву адресу й дозвіл фаєрвола для Nodi." else "Mac недоступний у цій мережі. Перевір Wi-Fi або перемкни на «Інтернет»."
             message.contains("ENOSPC") -> "На телефоні немає місця для тимчасової копії. Звільни місце або вибери менший файл."
             message.contains("text is not supported") -> "Цей пристрій не приймає текст. Онови Nodi на Mac."
             message.contains("text must be between") -> "Текст завеликий. Максимум — 64 КБ."
@@ -1042,6 +1060,29 @@ class MainActivity : Activity() {
     private fun showMode(receive: Boolean) {
         showTab(if (receive) 1 else 2)
     }
+    private fun setRoute(internet: Boolean) {
+        if (busy || texting || pairing || scanning) return
+        routeInternet = internet
+        getSharedPreferences("nodi_ui", MODE_PRIVATE).edit().putString("route", if (internet) "internet" else "wifi").apply()
+        renderRoute()
+    }
+    /** The toggle decides both how devices are added and how files and text travel. */
+    private fun renderRoute() {
+        for ((mode, selected) in listOf(wifiMode to !routeInternet, internetMode to routeInternet)) {
+            mode.background = if (selected) accentGradient(12) else panelBackground(CARD, 12)
+            mode.setTextColor(if (selected) Color.WHITE else MUTED)
+            icon(mode, if (mode == wifiMode) "wifi" else "globe", if (selected) Color.WHITE else MUTED)
+            mode.isSelected = selected
+        }
+        routeHint.text = tr(if (routeInternet) "Через зашифрований relay · до 16 MiB на файл" else "Напряму в одній мережі · до 2 GiB на файл")
+        nearbyRefresh.visibility = if (routeInternet) View.GONE else View.VISIBLE
+        scanButton.visibility = nearbyRefresh.visibility
+        endpointButton.visibility = nearbyRefresh.visibility
+        roomButton.visibility = if (routeInternet) View.VISIBLE else View.GONE
+    }
+    /** Wi-Fi mode never touches the relay; Internet mode never tries the direct address. */
+    private fun newTransfer(): NodiTransfer =
+        if (routeInternet) NodiTransfer(NodiInternetStore.client(this), relayOnly = true) else NodiTransfer()
     private fun showTab(index: Int) {
         activeTab = index
         showingReceive = index == 1

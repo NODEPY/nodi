@@ -335,6 +335,7 @@ func send(args []string) error {
 	stdin := flags.Bool("code-stdin", false, "read connection code from standard input")
 	file := flags.String("file", "", "file to send")
 	machine := flags.Bool("json", false, "newline-delimited events for the desktop app")
+	route := flags.String("route", "auto", "auto (direct, then Internet), wifi (direct only) or internet (relay only)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -358,7 +359,9 @@ func send(args []string) error {
 	if err != nil {
 		return err
 	}
-	configureInternet(&invite, *machine, *file)
+	if err = configureInternet(&invite, *machine, *route, *file); err != nil {
+		return err
+	}
 	report(*machine, event{Type: "sending"}, "Checking file and sending...")
 	if err = transfer.SendProgress(invite, *file, func(p transfer.Progress) {
 		if !*machine {
@@ -382,6 +385,7 @@ func sendText(args []string) error {
 	text := flags.String("text", "", "text or link to send")
 	stdin := flags.Bool("stdin", false, "read one JSON payload {code,text} from standard input")
 	machine := flags.Bool("json", false, "newline-delimited events for the desktop app")
+	route := flags.String("route", "auto", "auto (direct, then Internet), wifi (direct only) or internet (relay only)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -413,7 +417,9 @@ func sendText(args []string) error {
 	if err != nil {
 		return err
 	}
-	configureInternet(&invite, *machine)
+	if err = configureInternet(&invite, *machine, *route); err != nil {
+		return err
+	}
 	report(*machine, event{Type: "sending_text"}, "Sending text...")
 	if err = transfer.SendText(invite, *text); err != nil {
 		return err
@@ -521,10 +527,23 @@ func relayClient() *internet.Client {
 	}
 	return client
 }
-func configureInternet(invite *transfer.Invite, machine bool, files ...string) {
+
+// configureInternet applies the route chosen in the app: "wifi" never touches the
+// relay, "internet" goes through it without trying the direct address first, and
+// "auto" (the CLI default) tries direct TCP and falls back to the relay.
+func configureInternet(invite *transfer.Invite, machine bool, route string, files ...string) error {
+	switch route {
+	case "", "auto":
+	case "wifi":
+		return nil
+	case "internet":
+		invite.RelayOnly = true
+	default:
+		return fmt.Errorf("unknown -route %q: use auto, wifi or internet", route)
+	}
 	relay := relayClient()
 	if relay == nil {
-		return
+		return nil
 	}
 	pin := invite.Fingerprint
 	invite.Fallback = func() (net.Conn, error) {
@@ -552,4 +571,5 @@ func configureInternet(invite *transfer.Invite, machine bool, files ...string) {
 		}
 		return c, err
 	}
+	return nil
 }
