@@ -187,7 +187,7 @@ Windows and Linux apps · NAT traversal · offline delivery · folder transfer �
 ## Support
 
 Nodi is free, with no ads and no trackers. If it saves you time, you can
-[support the author on Ko-fi](https://ko-fi.com/KOFI_NAME) — tips help pay for the relay and Apple notarization.
+[support the author on Ko-fi](https://ko-fi.com/nodepy_nodi) — tips help pay for the relay and Apple notarization.
 Feedback, bug reports and pull requests are just as welcome.
 
 ## License
