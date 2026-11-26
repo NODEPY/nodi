@@ -378,13 +378,12 @@ class MainActivity : Activity() {
         column.addItem(header,0)
         connectionColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         column.addItem(connectionColumn, 0)
-        nearbyRefresh = button("Знайти у Wi-Fi", true) {
+        // Both ways to add a device stay on screen in either mode; the switch only picks the route.
+        nearbyRefresh = tonalButton("Знайти у Wi-Fi", "wifi") {
             startDiscovery(true)
             requestConnection()
         }
-        icon(nearbyRefresh, "wifi", Color.WHITE)
-        roomButton = button("Кімната", true) { internetSettings() }
-        icon(roomButton, "globe", Color.WHITE)
+        roomButton = tonalButton("Кімната", "globe") { internetSettings() }
         routeInternet = getSharedPreferences("nodi_ui", MODE_PRIVATE).getString("route", "wifi") == "internet"
         val routeSwitch = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = cardBackground(); setPadding(dp(4),dp(4),dp(4),dp(4)) }
         wifiMode = button("Wi-Fi") { setRoute(false) }
@@ -393,8 +392,10 @@ class MainActivity : Activity() {
         connectionColumn.addItem(routeSwitch, 18)
         routeHint = label("", 12f, MUTED).apply { gravity = Gravity.CENTER }
         connectionColumn.addItem(routeHint, 8)
-        connectionColumn.addItem(nearbyRefresh, 12, dp(52))
-        connectionColumn.addItem(roomButton, 12, dp(52))
+        val entry = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        entry.addView(nearbyRefresh, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(10) })
+        entry.addView(roomButton, LinearLayout.LayoutParams(0, dp(52), 1f))
+        connectionColumn.addItem(entry, 12)
         val deviceCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = cardBackground()
             setPadding(dp(16), dp(16), dp(16), dp(16))
@@ -722,7 +723,7 @@ class MainActivity : Activity() {
         if(busy || texting || pairing || scanning)return
         val input=EditText(this).apply {hint="XXXX-XXXX-XXXX-XXXX";isSingleLine=true;typeface=Typeface.MONOSPACE;gravity=Gravity.CENTER;textSize=17f;letterSpacing=0.04f}.onDialog()
         NodiDialog(this).setTitle("Інтернет · кімната")
-            .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.")
+            .setMessage("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 48 MiB на файл. Приймання має бути ввімкнене.")
             .setView(dialogBox(input)).setPositiveButton("Створити кімнату"){_,_->internetRoom(null)}
             .setNeutralButton("Приєднатися"){_,_->internetRoom(input.text.toString())}
             .setNegativeButton("Закрити",null).show()
@@ -1074,11 +1075,7 @@ class MainActivity : Activity() {
             icon(mode, if (mode == wifiMode) "wifi" else "globe", if (selected) Color.WHITE else MUTED)
             mode.isSelected = selected
         }
-        routeHint.text = tr(if (routeInternet) "Через зашифрований relay · до 16 MiB на файл" else "Напряму в одній мережі · до 2 GiB на файл")
-        nearbyRefresh.visibility = if (routeInternet) View.GONE else View.VISIBLE
-        scanButton.visibility = nearbyRefresh.visibility
-        endpointButton.visibility = nearbyRefresh.visibility
-        roomButton.visibility = if (routeInternet) View.VISIBLE else View.GONE
+        routeHint.text = tr(if (routeInternet) "Через зашифрований relay · до 48 MiB на файл" else "Напряму в одній мережі · до 2 GiB на файл")
     }
     /** Wi-Fi mode never touches the relay; Internet mode never tries the direct address. */
     private fun newTransfer(): NodiTransfer =

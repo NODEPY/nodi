@@ -226,7 +226,7 @@ class NodiTransfer(private val internet: NodiInternet? = null, private val relay
         context.init(null, arrayOf<TrustManager>(trust), SecureRandom())
         val viaRelay={
             val relay=internet ?: throw IOException("Інтернет ще не підключено: створи кімнату або введи код")
-            if(size>16L*1024*1024)throw IOException("Інтернет-альфа: файл має бути не більшим за 16 MiB")
+            if(size>48L*1024*1024)throw IOException("Інтернет-альфа: файл має бути не більшим за 48 MiB")
             track(relay.dial(invite.fingerprint.hex()){checkActive()})
         }
         var raw: java.net.Socket
