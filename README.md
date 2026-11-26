@@ -120,7 +120,7 @@ Apple Silicon (M1 or newer) and macOS 12+ are required.
 ## Limitations
 
 > [!NOTE]
-> Nodi is an **alpha**. Over the Internet files are limited to 16 MiB and 10 minutes per session, and receiving must stay on. The free-plan relay accepts up to 1000 device identities and 32 simultaneous transfers, and comfortably serves a few dozen devices with receiving always on. There is no NAT traversal, offline delivery, folder transfer or resume. The Mac build is Apple Silicon only and ad-hoc signed; the Android build is debug-signed.
+> Nodi is an **alpha**. Over the Internet files are limited to 48 MiB and 10 minutes per session, and receiving must stay on. The free-plan relay accepts up to 1000 device identities and 32 simultaneous transfers, and comfortably serves a few dozen devices with receiving always on. There is no NAT traversal, offline delivery, folder transfer or resume. The Mac build is Apple Silicon only and ad-hoc signed; the Android build is debug-signed.
 
 See [TESTING.md](TESTING.md) for known test gaps and the device checklist.
 

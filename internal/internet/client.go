@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -143,7 +144,7 @@ func (c *Client) Connect(ctx context.Context, s Session) (net.Conn, error) {
 		}
 		return nil, errors.New("internet relay connection failed")
 	}
-	ws.SetReadLimit(64 * 1024)
+	ws.SetReadLimit(frameSize)
 	kind, b, err := ws.Read(dialCtx)
 	if err != nil || kind != websocket.MessageText || string(b) != "{\"type\":\"ready\"}" {
 		ws.CloseNow()
@@ -156,6 +157,14 @@ func (c *Client) Connect(ctx context.Context, s Session) (net.Conn, error) {
 	go func() { defer c.Cancel(s); bridge(ctx, ws, pump, c.Diagnostic) }()
 	return app, nil
 }
+
+// frameSize is the relay's MAX_FRAME (64 KiB).
+const frameSize = 64 * 1024
+
+// MaxFileBytes is the Internet file limit. The relay allows 64 MiB and 4096 frames per
+// session (each data frame plus its empty ACK); 64 KiB frames keep 48 MiB well inside both.
+const MaxFileBytes = 48 * 1024 * 1024
+
 func bridge(ctx context.Context, ws *websocket.Conn, local net.Conn, diagnostic func(string)) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -170,9 +179,23 @@ func bridge(ctx context.Context, ws *websocket.Conn, local net.Conn, diagnostic 
 	go func() {
 		defer pumps.Done()
 		defer cancel()
-		buf := make([]byte, 32*1024)
+		// Relay frames are counted (4096 per session, ACKs included), so pack as much as
+		// is ready into one frame of up to 64 KiB instead of one 16 KiB TLS record each.
+		buf := make([]byte, frameSize)
 		for {
 			n, e := local.Read(buf)
+			for e == nil && n > 0 && n < len(buf) {
+				_ = local.SetReadDeadline(time.Now().Add(2 * time.Millisecond))
+				m, more := local.Read(buf[n:])
+				n += m
+				if more != nil {
+					if !errors.Is(more, os.ErrDeadlineExceeded) {
+						e = more
+					}
+					break
+				}
+			}
+			_ = local.SetReadDeadline(time.Time{})
 			if n > 0 {
 				if ws.Write(ctx, websocket.MessageBinary, buf[:n]) != nil {
 					return

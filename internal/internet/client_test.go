@@ -115,13 +115,15 @@ func TestIncomingDataDoesNotBlockOutgoingAck(t *testing.T) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
 		ws.Write(ctx, websocket.MessageText, []byte(`{"type":"ready"}`))
-		_, _, e = ws.Read(ctx)
+		_, first, e := ws.Read(ctx)
 		if e != nil {
 			return
 		}
 		ws.Write(ctx, websocket.MessageBinary, []byte("incoming"))
 		ws.Write(ctx, websocket.MessageBinary, nil)
-		sawSecond, sawAck := false, false
+		// The client packs ready bytes into one frame, so "second" may already have
+		// arrived together with "first" (and was acknowledged just above).
+		sawSecond, sawAck := strings.Contains(string(first), "second"), false
 		for !sawSecond || !sawAck {
 			_, data, err := ws.Read(ctx)
 			if err != nil {
@@ -214,4 +216,73 @@ func TestWaitIncomingLongPollsAndPaces(t *testing.T) {
 	if polls < 2 || polls > 5 {
 		t.Fatalf("receiver polled %d times in 1s; quick empty answers must be paced", polls)
 	}
+}
+
+// TLS writes 16 KiB records; the relay counts frames, so the tunnel must pack them.
+func TestTunnelPacksRecordsIntoLargerFrames(t *testing.T) {
+	type result struct {
+		frames, bytes, largest int
+		err                    error
+	}
+	done := make(chan result, 1)
+	const chunk, chunks = 16 * 1024, 10
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			w.Write([]byte("{}"))
+			return
+		}
+		ws, e := websocket.Accept(w, r, nil)
+		if e != nil {
+			return
+		}
+		defer ws.CloseNow()
+		ws.SetReadLimit(64 * 1024) // the relay's MAX_FRAME
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		ws.Write(ctx, websocket.MessageText, []byte(`{"type":"ready"}`))
+		var res result
+		for res.bytes < chunk*chunks {
+			_, data, err := ws.Read(ctx)
+			if err != nil {
+				res.err = err
+				break
+			}
+			res.frames++
+			res.bytes += len(data)
+			if len(data) > res.largest {
+				res.largest = len(data)
+			}
+			ws.Write(ctx, websocket.MessageBinary, nil) // ACK, as the relay peer does
+		}
+		done <- res
+		_, _, _ = ws.Read(ctx)
+	}))
+	defer server.Close()
+	c := Client{Base: server.URL, Token: "test"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, e := c.Connect(ctx, Session{ID: "one", Ticket: "ticket"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer stream.Close()
+	go func() {
+		block := make([]byte, chunk)
+		for i := 0; i < chunks; i++ {
+			if _, err := stream.Write(block); err != nil {
+				return
+			}
+		}
+	}()
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if res.largest > 64*1024 {
+		t.Fatalf("frame of %d bytes exceeds the relay limit", res.largest)
+	}
+	if res.frames >= chunks {
+		t.Fatalf("%d records were sent as %d frames; expected them to be packed", chunks, res.frames)
+	}
+	t.Logf("%d × 16 KiB records → %d frames (largest %d bytes)", chunks, res.frames, res.largest)
 }

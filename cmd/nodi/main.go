@@ -552,8 +552,8 @@ func configureInternet(invite *transfer.Invite, machine bool, route string, file
 			if err != nil {
 				return nil, err
 			}
-			if info.Size() > 16*1024*1024 {
-				return nil, fmt.Errorf("Інтернет-альфа: файл має бути не більшим за 16 MiB")
+			if info.Size() > internet.MaxFileBytes {
+				return nil, fmt.Errorf("Інтернет-альфа: файл має бути не більшим за 48 MiB")
 			}
 		}
 		report(machine, event{Type: "route", Message: "Інтернет"}, "")

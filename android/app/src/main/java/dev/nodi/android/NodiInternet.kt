@@ -74,8 +74,11 @@ class NodiInternet(private val token: String, private val base: String = SERVER,
             socket.getOutputStream().write(data)
             if(ws?.send(ByteString.EMPTY)!=true)break
         }}catch(_:Exception){}finally{stop()}},"Nodi-relay-read").apply{isDaemon=true;start()}
-        Thread({try{val b=ByteArray(32768);while(!closed.get()){
-            val n=socket.getInputStream().read(b);if(n<0)break
+        // The relay counts frames (4096 per session, ACKs included): pack whatever TLS has
+        // already written into one frame of up to 64 KiB instead of one 16 KiB record each.
+        Thread({try{val b=ByteArray(65536);val input=socket.getInputStream();while(!closed.get()){
+            var n=input.read(b);if(n<0)break
+            while(n<b.size){val ready=input.available();if(ready<=0)break;val m=input.read(b,n,minOf(ready,b.size-n));if(m<=0)break;n+=m}
             if(ws?.send(b.toByteString(0,n))!=true || !ack.tryAcquire(30,TimeUnit.SECONDS))break
         }}catch(_:Exception){}finally{stop();cancel(session)}},"Nodi-relay-write").apply{isDaemon=true;start()}
     }

@@ -75,7 +75,7 @@ class GoInteropTest {
         val process=builder.start()
         try {
             process.outputStream.bufferedWriter().use { it.write(input) }
-            check(process.waitFor(if(relayToken==null)15 else 60, TimeUnit.SECONDS)) { "Go sender timed out" }
+            check(process.waitFor(if(relayToken==null)15 else 300, TimeUnit.SECONDS)) { "Go sender timed out" }
             if(process.exitValue()!=0 && relayToken!=null) {
                 output.readLines().forEach { line ->
                     val event=runCatching{JSONObject(line)}.getOrNull()
@@ -164,7 +164,8 @@ class GoInteropTest {
     }
 
     /** Opt-in real deployed relay test; no account secrets are stored in source. */
-    @Test(timeout=180000) fun publicRelayKotlinGoFilesAndTextBothDirections() {
+    // NODI_TEST_RELAY_BYTES (default 180000) checks bigger files, e.g. 47 MiB near the 48 MiB limit.
+    @Test(timeout=900000) fun publicRelayKotlinGoFilesAndTextBothDirections() {
         val adminToken=System.getenv("NODI_TEST_RELAY_ADMIN")
         org.junit.Assume.assumeTrue("Requires explicitly enabled remote smoke test", !adminToken.isNullOrEmpty())
         val admin=NodiInternet(adminToken!!)
@@ -186,7 +187,7 @@ class GoInteropTest {
                 kotlinRelay.api("PUT","/v1/peers/$goPin")
                 GoReceiver(storage,goToken,goPin).use { goReceiver ->
                     fun next(type:String):JSONObject {
-                        val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(40)
+                        val until=System.nanoTime()+TimeUnit.SECONDS.toNanos(300)
                         while(System.nanoTime()<until){val event=goReceiver.events.poll(1,TimeUnit.SECONDS)?:continue;if(event.optString("type")==type)return event}
                         error("Missing Go event: $type")
                     }
@@ -194,14 +195,19 @@ class GoInteropTest {
                     val toGo=TrustedDevice("Go","127.0.0.1:1",goPin,goPairToken).code()
                     val toKotlin=TrustedDevice("Kotlin","127.0.0.1:1",k.fingerprint.hex(),k.token).code()
                     kotlinRelay.receive(k.port,{listOf(goPin)},{}).use {
-                        val data=ByteArray(180000){(it%251).toByte()}
+                        val size=System.getenv("NODI_TEST_RELAY_BYTES")?.toIntOrNull() ?: 180000
+                        val data=ByteArray(size){(it%251).toByte()}
+                        val started=System.nanoTime()
                         send(toGo,"relay-kotlin.bin",data,NodiTransfer(kotlinRelay))
                         next("received")
                         assertArrayEquals(data,File(goReceiver.inbox,"relay-kotlin.bin").readBytes())
+                        System.err.println("Kotlin → Go relay: $size bytes in ${(System.nanoTime()-started)/1_000_000} ms")
                         NodiTransfer(kotlinRelay).sendText(NodiInvite.parse(toGo),"Kotlin → Go через інтернет")
                         assertEquals("Kotlin → Go через інтернет",next("text_received").getString("text"))
                         val file=File(temp.newFolder(),"relay-go.bin").apply{writeBytes(data)}
+                        val goStarted=System.nanoTime()
                         assertEquals(0,go("send",toKotlin,file,relayToken=goToken))
+                        System.err.println("Go → Kotlin relay: $size bytes in ${(System.nanoTime()-goStarted)/1_000_000} ms")
                         assertArrayEquals(data,File(kotlinReceiver.inbox,"relay-go.bin").readBytes())
                         assertEquals(0,go("send-text",toKotlin,text="Go → Kotlin через інтернет",relayToken=goToken))
                         assertEquals("Go → Kotlin через інтернет",kotlinReceiver.texts.poll(15,TimeUnit.SECONDS))

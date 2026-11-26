@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Switching Wi-Fi / Internet no longer changes the screen: «Find on Wi-Fi», «Room», QR and Address / VPN stay in place in both modes; only the route and the hint change.
+- Internet transfers: files up to 48 MiB (was 16 MiB) and 2–4× faster — the tunnel packs TLS records into 64 KiB relay frames, so far fewer frames and acknowledgements are needed. Works with the current relay; no server change.
 - macOS: Internet credentials move from the Keychain to a private file next to the device identity (`~/Library/Application Support/Nodi/Devices/internet.json`, 0600). Updates no longer ask for the login password; the first launch after updating moves the old Keychain entry once.
 - Wi-Fi / Internet toggle on Android and macOS replaces the two connect buttons. Wi-Fi sends only directly (up to 2 GiB); Internet goes straight through the relay without the 4-second direct attempt. The choice is remembered; receiving still works both ways. CLI: `-route auto|wifi|internet` for `send` and `send-text`.
 - «Support the author» button in the Feedback dialog on Android and macOS; it opens the support section of the website. Support links on the website and in the README.

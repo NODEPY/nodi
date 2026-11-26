@@ -429,7 +429,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.addButton.title = "QR"; self.forgetButton.title = "Видалити"
         self.chooseButton.title = "Вибрати файл"; self.sendButton.title = "Надіслати"; self.folderButton.title = "Змінити"
         let accent = NodiPalette.accent
-        for button in [refresh, internet, self.sendButton, self.sendTextButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
+        for button in [self.sendButton, self.sendTextButton] { button.primary = true; button.bezelColor = accent; button.contentTintColor = .white; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
+        // Both ways to add a device stay visible in either mode; the switch only picks the route.
+        for button in [refresh, internet] { button.tonal = true; button.font = .systemFont(ofSize: 14, weight: .semibold); button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
         self.symbol(refresh,"wifi"); self.symbol(self.addButton,"qrcode"); self.symbol(self.forgetButton,"trash")
         self.symbol(internet,"globe")
         self.symbol(self.chooseButton,"doc.badge.plus"); self.symbol(self.sendButton,"arrow.up"); self.symbol(open,"folder")
@@ -582,7 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard self.sender == nil && !self.stopping else{return}
         let alert=NSAlert();alert.messageText=NodiL("Інтернет · кімната")
-        alert.informativeText=NodiL("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл.")
+        alert.informativeText=NodiL("Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 48 MiB на файл.")
         let input=NSTextField(frame:NSRect(x:0,y:0,width:360,height:28));input.placeholderString="XXXX-XXXX-XXXX-XXXX"
         alert.accessoryView=input;alert.addButton(withTitle:NodiL("Створити кімнату"));alert.addButton(withTitle:NodiL("Приєднатися"));alert.addButton(withTitle:NodiL("Закрити"))
         let result=alert.runModal()
@@ -925,9 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The toggle decides both how devices are added and how files and text travel.
     private func renderRoute() {
         self.wifiModeButton.primary = !self.routeInternet; self.internetModeButton.primary = self.routeInternet
-        self.refreshButton.isHidden = self.routeInternet; self.addButton.isHidden = self.routeInternet; self.endpointButton.isHidden = self.routeInternet
-        self.roomButton.isHidden = !self.routeInternet
-        self.routeHint.stringValue = NodiL(self.routeInternet ? "Через зашифрований relay · до 16 MiB на файл" : "Напряму в одній мережі · до 2 GiB на файл")
+        self.routeHint.stringValue = NodiL(self.routeInternet ? "Через зашифрований relay · до 48 MiB на файл" : "Напряму в одній мережі · до 2 GiB на файл")
         if self.window != nil { self.deviceChanged() }
     }
     private var routeArgument: String { self.routeInternet ? "internet" : "wifi" }
@@ -1223,7 +1223,7 @@ func NodiL(_ original: String) -> String {
 private let nodiWords: [String:[String]] = [
 "Зберегти": ["Save", "Сохранить"],
 "Інтернет увімкнено": ["Internet on", "Интернет включён"],
-"Інтернет-альфа: файл має бути не більшим за 16 MiB": ["Internet alpha: files must be 16 MiB or smaller", "Интернет-альфа: файл должен быть не больше 16 MiB"],
+"Інтернет-альфа: файл має бути не більшим за 48 MiB": ["Internet alpha: files must be 48 MiB or smaller", "Интернет-альфа: файл должен быть не больше 48 MiB"],
 "Код помилки:": ["Error code:", "Код ошибки:"],
 "Код кімнати має містити 16 символів": ["A room code has 16 characters", "Код комнаты должен содержать 16 символов"],
 "Підключення скасовано": ["Connection cancelled", "Подключение отменено"],
@@ -1253,11 +1253,11 @@ private let nodiWords: [String:[String]] = [
 "Помилка передачі": ["Transfer error", "Ошибка передачи"],
 "Код не підходить цьому пристрою.": ["This code does not match this device.", "Код не подходит этому устройству."],
 "Відгук бачить лише автор. Добровільна статистика: активні встановлення й кількість передач, без імен файлів, текстів і контактів. Зберігання до 30 днів.": ["Only the author sees feedback. Statistics are optional: active installs and transfer counts, without file names, texts or contacts. Kept for up to 30 days.", "Отзыв видит только автор. Статистика добровольная: активные установки и количество передач, без имён файлов, текстов и контактов. Хранится до 30 дней."],
-"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 16 MiB per file.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 16 MiB на файл."],
+"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 48 MiB на файл.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 48 MiB per file.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 48 MiB на файл."],
 "Передай іншій людині й залиш Nodi відкритим.": ["Share it with the other person and keep Nodi open.", "Передай другому человеку и оставь Nodi открытым."],
 "5 хвилин": ["5 minutes", "5 минут"],
 "Інтернет · кімната": ["Internet · room", "Интернет · комната"],
-"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 16 MiB на файл. Приймання має бути ввімкнене.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 16 MiB per file. Receiving must be on.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 16 MiB на файл. Приём должен быть включён."],
+"Створи кімнату й передай код іншій людині або введи її код. Підтвердь пристрій перед обміном. Код діє 5 хвилин; до 48 MiB на файл. Приймання має бути ввімкнене.": ["Create a room and share its code with the other person, or enter their code. Confirm the device before sharing. The code is valid for 5 minutes; up to 48 MiB per file. Receiving must be on.", "Создай комнату и передай код другому человеку или введи его код. Подтверди устройство перед обменом. Код действует 5 минут; до 48 MiB на файл. Приём должен быть включён."],
 "Створити кімнату": ["Create room", "Создать комнату"],
 "Приєднатися": ["Join", "Присоединиться"],
 "Кімната активна": ["Room is active", "Комната активна"],
@@ -1292,7 +1292,7 @@ private let nodiWords: [String:[String]] = [
 "Через інтернет · на іншому пристрої має бути ввімкнене приймання": ["Over the Internet · receiving must be on on the other device", "Через интернет · на другом устройстве должен быть включён приём"],
 "Створи кімнату або введи код, щоб додати пристрій": ["Create a room or enter a code to add a device", "Создай комнату или введи код, чтобы добавить устройство"],
 "Не знайдено в цій мережі · увімкни приймання або перемкни на «Інтернет»": ["Not found on this network · turn on receiving or switch to «Internet»", "Не найдено в этой сети · включи приём или переключись на «Интернет»"],
-"Через зашифрований relay · до 16 MiB на файл": ["Through the encrypted relay · up to 16 MiB per file", "Через зашифрованный relay · до 16 MiB на файл"],
+"Через зашифрований relay · до 48 MiB на файл": ["Through the encrypted relay · up to 48 MiB per file", "Через зашифрованный relay · до 48 MiB на файл"],
 "Напряму в одній мережі · до 2 GiB на файл": ["Directly on the same network · up to 2 GiB per file", "Напрямую в одной сети · до 2 GiB на файл"],
 "Інтернет ще не підключено: створи кімнату або введи код": ["Internet is not set up yet: create a room or enter a code", "Интернет ещё не подключён: создай комнату или введи код"],
 "Адреса / VPN": ["Address / VPN", "Адрес / VPN"],
