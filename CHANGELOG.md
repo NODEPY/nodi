@@ -1,12 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.10 — 2026-11-26
 
-- Switching Wi-Fi / Internet no longer changes the screen: «Find on Wi-Fi», «Room», QR and Address / VPN stay in place in both modes; only the route and the hint change.
-- Internet transfers: files up to 48 MiB (was 16 MiB) and 2–4× faster — the tunnel packs TLS records into 64 KiB relay frames, so far fewer frames and acknowledgements are needed. Works with the current relay; no server change.
-- macOS: Internet credentials move from the Keychain to a private file next to the device identity (`~/Library/Application Support/Nodi/Devices/internet.json`, 0600). Updates no longer ask for the login password; the first launch after updating moves the old Keychain entry once.
-- Wi-Fi / Internet toggle on Android and macOS replaces the two connect buttons. Wi-Fi sends only directly (up to 2 GiB); Internet goes straight through the relay without the 4-second direct attempt. The choice is remembered; receiving still works both ways. CLI: `-route auto|wifi|internet` for `send` and `send-text`.
-- «Support the author» button in the Feedback dialog on Android and macOS; it opens the support section of the website. Support links on the website and in the README.
+### 🔀 Wi-Fi or Internet — your choice
+
+- A Wi-Fi | Internet switch on Android and macOS. Wi-Fi sends only directly (up to 2 GiB) and never touches the relay; Internet goes straight through the relay without the 4-second direct attempt. The choice is remembered, and receiving keeps working both ways.
+- The screen stays the same in both modes: «Find on Wi-Fi», «Room», QR and Address / VPN are always in place; only the route and the hint change.
+- When a device is not reachable on Wi-Fi, Nodi suggests switching to Internet.
+- CLI: `-route auto|wifi|internet` for `send` and `send-text` (`auto` stays the default).
+
+### 🚀 Bigger, faster Internet transfers
+
+- Files up to **48 MiB** over the Internet (was 16 MiB).
+- 2–4× faster: the tunnel packs TLS records into 64 KiB relay frames, so far fewer frames and acknowledgements are needed. Same relay, nothing to update on the server; Alpha 6–9 keep working.
+
+### 🍏 macOS
+
+- No more login-password prompt for «dev.nodi.internet.v1» after updates: Internet credentials now live in a private file next to the device identity (`~/Library/Application Support/Nodi/Devices/internet.json`, 0600). The first launch of Alpha 10 moves the old Keychain entry once.
+
+### ☕ Support
+
+- «Support the author» in the Feedback dialog on Android and macOS, plus a support section on the website and in the README (Ko-fi).
 
 ## 1.0.0-alpha.9 — 2026-11-24
 

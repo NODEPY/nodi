@@ -1,22 +1,24 @@
 # Nodi — handoff for a new session
 
-Last updated: 2026-11-25 · `main` at `057b122` (Merge PR #15, support the author) · no open
-pull requests. Everything below "History" is older checkpoint notes, newest first;
-where they disagree with this section, this section wins.
+Last updated: 2026-11-26 · release branch `codex/alpha-10` (Alpha 10). Everything below
+"History" is older checkpoint notes, newest first; where they disagree with this section,
+this section wins.
 
 ## 1. Status in one minute
 
 - **Product:** Nodi sends files, text and links between a Mac (Apple Silicon) and an Android
   phone — directly on the same Wi-Fi, or across networks through an encrypted relay.
   No accounts, no cloud storage. Apache-2.0, public repo `NODEPY/nodi`.
-- **Latest release:** `v1.0.0-alpha.9` (pre-release, 2026-11-24). Android `1.0.0-alpha.9` /
-  versionCode 9, macOS `1.0.0` / build 11. Alpha 9 = long-poll relay (instant Internet
-  transfers) + relay capacity work. Alpha 8 = full EN/RU translations. Alpha 7 = new design.
+- **Latest release:** `v1.0.0-alpha.10` (pre-release, 2026-11-26). Android `1.0.0-alpha.10` /
+  versionCode 10, macOS `1.0.0` / build 12. Alpha 10 = Wi-Fi | Internet route switch (same
+  screen in both modes), Internet files up to 48 MiB and 2–4× faster (64 KiB relay frames),
+  macOS relay credentials in a 0600 file instead of the Keychain, «Support the author» (Ko-fi
+  https://ko-fi.com/nodepy_nodi). Alpha 9 = long-poll relay. Alpha 8 = EN/RU. Alpha 7 = design.
 - **Physically verified:** Internet scenarios 1–8 (rooms both ways, files/text both ways,
   restart, cancel, wrong/expired code) on the owner's Mac (Wi-Fi) ↔ Galaxy S21 FE (mobile
-  data) with the rooms test builds of 2026-11-06/23 (version 1.0.0-alpha.5). Everything after Alpha 6 (design, translations,
-  long-poll) was verified by automated tests, an Android API 37 emulator and macOS window
-  snapshots, **not** on the physical phone yet.
+  data) with the rooms test builds of 2026-11-06/23 (version 1.0.0-alpha.5). Everything after Alpha 6 was
+  verified by automated tests, an Android API 37 emulator and macOS window snapshots. The
+  owner ran a pre-Alpha-10 test build on the Mac (2026-11-25, «все працює»); not yet on the phone.
 - **Current goal of the owner:** promote Nodi (Reddit, Hacker News, then AlternativeTo,
   awesome-lists, Ukrainian communities). Post drafts are in Appendix A. Nothing has been
   posted yet; the owner posts from their own accounts (or approves each post explicitly).
@@ -188,7 +190,10 @@ Gradle may treat tests as up-to-date and print nothing — use `--rerun-tasks` t
   arrive (room-paired peers).
 - Capacity: `MAX_DEVICES` 1000, `MAX_SESSIONS` 32 (≤2 per device), 32 pending rooms
   (≤2 per host), presence 75 s, session rendezvous `WAIT_MS` 30 s, life 10 min, 64 MiB and
-  4096 frames per session, 64 KiB frames, Internet files 16 MiB (client side). Roughly 50
+  4096 frames per session (data frames + empty ACKs), 64 KiB frames. Clients pack TLS records
+  into frames of up to 64 KiB (Go: 2 ms read deadline on the pipe; Kotlin: `available()`), which
+  allows Internet files of 48 MiB (client side, `internet.MaxFileBytes`); 47 MiB both ways
+  took ~130 s through the live relay. Do not shrink frames again without lowering the limit. Roughly 50
   devices can keep receiving on all day within the free plan.
 - **Before deploying relay changes:** Miniflare tests, then deploy, then the 2 public
   interop tests with the new clients AND with the old clients — the old-client check:
@@ -229,7 +234,9 @@ Gradle may treat tests as up-to-date and print nothing — use `--rerun-tasks` t
 
 ## 12. Known gaps and ideas (roughly by priority)
 
-0. The «Support the author» button (PR #15) is in `main` but not in any release yet — it ships with Alpha 10. Its CI macOS job was still queued when the owner chose to merge.
+0. Videos for TikTok live outside the repo in `~/Projects/nodi-video/` (scripts + synthesized
+   music; ElevenLabs voice by the owner). video3 = reply to a comment, publish only after Alpha 10.
+
 
 1. **Promotion** (owner's current goal) — Appendix A; then AlternativeTo, PRs to awesome
    lists, DOU/Telegram (Ukrainian), Product Hunt only after notarization.
